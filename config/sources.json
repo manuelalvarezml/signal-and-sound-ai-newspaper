@@ -1,0 +1,19 @@
+[
+ {"id":"openai","name":"OpenAI","url":"https://openai.com/news/rss.xml","kind":"rss","page":"ai","authority":1},
+ {"id":"anthropic","name":"Anthropic","url":"https://www.anthropic.com/news","kind":"html","page":"ai","authority":1,"path_filter":"/news/"},
+ {"id":"deepmind","name":"Google DeepMind","url":"https://deepmind.google/blog/rss.xml","kind":"rss","page":"ai","authority":1},
+ {"id":"huggingface","name":"Hugging Face","url":"https://huggingface.co/blog/feed.xml","kind":"rss","page":"ai","authority":0.9},
+ {"id":"simon","name":"Simon Willison","url":"https://simonwillison.net/atom/entries/","kind":"rss","page":"ai","authority":0.8},
+ {"id":"aws","name":"AWS AI","url":"https://aws.amazon.com/blogs/machine-learning/feed/","kind":"rss","page":"ai","authority":1},
+ {"id":"apple","name":"Apple ML Research","url":"https://machinelearning.apple.com/rss.xml","kind":"rss","page":"ai","authority":1},
+ {"id":"spotify","name":"Spotify Research","url":"https://research.atspotify.com/","kind":"html","page":"music","authority":1,"path_filter":"/2026/"},
+ {"id":"suno","name":"Suno","url":"https://suno.com/blog","kind":"html","page":"music","authority":1,"path_filter":"/blog/"},
+ {"id":"magenta","name":"Magenta","url":"https://magenta.withgoogle.com/feed.xml","kind":"rss","page":"music","authority":1},
+ {"id":"mtg","name":"UPF MTG","url":"https://www.upf.edu/web/mtg/news","kind":"html","page":"music","authority":1,"path_filter":"/-/"},
+ {"id":"arxiv-music","name":"arXiv music/audio","url":"https://export.arxiv.org/api/query?search_query=cat:cs.SD&sortBy=submittedDate&sortOrder=descending&max_results=30","kind":"rss","page":"music","authority":0.85},
+ {"id":"arxiv-ai","name":"arXiv AI","url":"https://rss.arxiv.org/rss/cs.AI","kind":"rss","page":"ai","authority":0.85},
+ {"id":"hn","name":"Hacker News","url":"https://hacker-news.firebaseio.com/v0/topstories.json","kind":"hn","page":"ai","authority":0.5},
+ {"id":"hf-forum","name":"Hugging Face Forums","url":"https://discuss.huggingface.co/latest.rss","kind":"rss","page":"ai","authority":0.5},
+ {"id":"batch","name":"The Batch","url":"https://www.deeplearning.ai/the-batch/","kind":"html","page":"ai","authority":0.75,"path_filter":"/the-batch/","weekly_only":true},
+ {"id":"latent","name":"Latent Space","url":"https://www.latent.space/feed","kind":"rss","page":"ai","authority":0.75,"weekly_only":true}
+]

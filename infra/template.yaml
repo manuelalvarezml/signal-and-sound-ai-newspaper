@@ -1,0 +1,235 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Signal and Sound, private storage and disabled-by-default publication
+Parameters:
+  ProductionEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  DeliveryEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable only after verifying the CloudFront Free flat-rate plan
+  BraveKeyParameter:
+    Type: String
+    Default: ''
+  XTokenParameter:
+    Type: String
+    Default: ''
+Conditions:
+  Production: !Equals [!Ref ProductionEnabled, 'true']
+  Delivery: !Equals [!Ref DeliveryEnabled, 'true']
+Globals:
+  Function:
+    Architectures: [arm64]
+    ReservedConcurrentExecutions: 1
+    Environment:
+      Variables:
+        PRODUCTION_ENABLED: !Ref ProductionEnabled
+        STATE_TABLE: !Ref StateTable
+        EVIDENCE_BUCKET: !Ref Evidence
+        PUBLIC_BUCKET: !Ref Publication
+        SITE_URL: !Sub 'https://${CDN.DomainName}'
+Resources:
+  Evidence:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - {Id: ExpireCheckpoints, Status: Enabled, Prefix: checkpoints/, ExpirationInDays: 45, NoncurrentVersionExpiration: {NoncurrentDays: 7}}
+          - {Id: ExpireRawHistory, Status: Enabled, Prefix: history/, ExpirationInDays: 90, NoncurrentVersionExpiration: {NoncurrentDays: 7}}
+  Publication:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules: [{Id: OldVersions, Status: Enabled, NoncurrentVersionExpiration: {NoncurrentDays: 30}}]
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+  OAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  CachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub '${AWS::StackName}-cache'
+        MinTTL: 0
+        DefaultTTL: 0
+        MaxTTL: 31536000
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          CookiesConfig: {CookieBehavior: none}
+          HeadersConfig: {HeaderBehavior: none}
+          QueryStringsConfig: {QueryStringBehavior: none}
+  CDN:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: !If [Delivery, true, false]
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_All
+        WebACLId: !GetAtt WebACL.Arn
+        Comment: Signal and Sound AI newspaper
+        Origins:
+          - Id: publication
+            DomainName: !GetAtt Publication.RegionalDomainName
+            OriginAccessControlId: !Ref OAC
+            S3OriginConfig: {OriginAccessIdentity: ''}
+        DefaultCacheBehavior:
+          TargetOriginId: publication
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: !Ref CachePolicy
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Scope: CLOUDFRONT
+      DefaultAction: {Allow: {}}
+      VisibilityConfig:
+        SampledRequestsEnabled: false
+        CloudWatchMetricsEnabled: false
+        MetricName: signal-and-sound
+  FreePlan:
+    Type: AWS::PricingPlanManager::Subscription
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [E3006]
+    Properties:
+      PlanFamily: CloudFront
+      PlanTier: FREE
+      UsageLevel: DEFAULT
+      ResourceArns:
+        - !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CDN}'
+        - !GetAtt WebACL.Arn
+  PublicationPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Publication
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub '${Publication.Arn}/*'
+            Condition: {StringEquals: {'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CDN}'}}
+  Collector:
+    Type: AWS::Serverless::Function
+    Metadata: {DockerTag: collector, DockerContext: '..', Dockerfile: Dockerfile}
+    Properties:
+      PackageType: Image
+      MemorySize: 512
+      Timeout: 900
+      ImageConfig: {Command: [newspaper.handlers.collector]}
+      Environment:
+        Variables:
+          PUBLISHER_FUNCTION: !Ref Publisher
+          BRAVE_API_KEY_PARAMETER: !Ref BraveKeyParameter
+          X_BEARER_TOKEN_PARAMETER: !Ref XTokenParameter
+      Policies:
+        - S3CrudPolicy: {BucketName: !Ref Evidence}
+        - DynamoDBCrudPolicy: {TableName: !Ref StateTable}
+        - LambdaInvokePolicy: {FunctionName: !Ref Publisher}
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0'
+                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0'
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/signal-and-sound/*'
+      EventInvokeConfig: {MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 3600}
+      Events:
+        Morning:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 6 * * ? *)
+            ScheduleExpressionTimezone: America/Lima
+            State: !If [Production, ENABLED, DISABLED]
+            FlexibleTimeWindow: {Mode: 'OFF'}
+            RetryPolicy: {MaximumRetryAttempts: 0}
+  Publisher:
+    Type: AWS::Serverless::Function
+    Metadata: {DockerTag: publisher, DockerContext: '..', Dockerfile: Dockerfile}
+    Properties:
+      PackageType: Image
+      MemorySize: 256
+      Timeout: 120
+      ImageConfig: {Command: [newspaper.handlers.publisher]}
+      Policies:
+        - S3ReadPolicy: {BucketName: !Ref Evidence}
+        - S3CrudPolicy: {BucketName: !Ref Publication}
+        - DynamoDBCrudPolicy: {TableName: !Ref StateTable}
+      EventInvokeConfig: {MaximumRetryAttempts: 1, MaximumEventAgeInSeconds: 3600}
+  CollectorLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Collector}'
+      RetentionInDays: 7
+  PublisherLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Publisher}'
+      RetentionInDays: 7
+  CollectorErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref Collector}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+  PublisherErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref Publisher}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+Outputs:
+  Website: {Value: !Sub 'https://${CDN.DomainName}'}
+  DistributionId: {Value: !Ref CDN}
+  EvidenceBucket: {Value: !Ref Evidence}
+  PublicationBucket: {Value: !Ref Publication}
+  CollectorFunction: {Value: !Ref Collector}
+  PublisherFunction: {Value: !Ref Publisher}
+  Plan: {Value: !Ref FreePlan}

@@ -1,0 +1,105 @@
+{
+  "version": "example-v1",
+  "last_reviewed": "2026-10-21",
+  "topics": [
+    {
+      "id": "agents",
+      "label": "Reliable agents and evaluation",
+      "keywords": [
+        "agents",
+        "evaluation",
+        "tool",
+        "LLM"
+      ],
+      "weight": 0.95,
+      "page": "ai"
+    },
+    {
+      "id": "infrastructure",
+      "label": "Practical AI infrastructure",
+      "keywords": [
+        "AWS",
+        "inference",
+        "deployment",
+        "latency"
+      ],
+      "weight": 0.85,
+      "page": "ai"
+    },
+    {
+      "id": "career",
+      "label": "Applied AI engineering and research pathways",
+      "keywords": [
+        "engineering",
+        "research",
+        "open source"
+      ],
+      "weight": 0.8,
+      "page": "ai"
+    },
+    {
+      "id": "voice",
+      "label": "Voice, memory and simple mobile interfaces",
+      "keywords": [
+        "voice",
+        "memory",
+        "mobile",
+        "realtime"
+      ],
+      "weight": 0.8,
+      "page": "ai"
+    },
+    {
+      "id": "recommendation",
+      "label": "Music recommendation and retrieval",
+      "keywords": [
+        "recommendation",
+        "retrieval",
+        "embedding",
+        "CLAP",
+        "playlist"
+      ],
+      "weight": 0.95,
+      "page": "music"
+    },
+    {
+      "id": "creative",
+      "label": "Controllable music and creative practice",
+      "keywords": [
+        "music",
+        "MIDI",
+        "generation",
+        "audio",
+        "DAW"
+      ],
+      "weight": 0.9,
+      "page": "music"
+    },
+    {
+      "id": "dj",
+      "label": "Responsive DJ tools and audio quality",
+      "keywords": [
+        "DJ",
+        "mix",
+        "streaming",
+        "latency"
+      ],
+      "weight": 0.85,
+      "page": "music"
+    },
+    {
+      "id": "culture",
+      "label": "Cultural specificity and artistic agency",
+      "keywords": [
+        "cultural",
+        "Latin",
+        "artist",
+        "provenance",
+        "diversity"
+      ],
+      "weight": 0.85,
+      "page": "music"
+    }
+  ],
+  "reading_level": "practitioner; explain mechanisms briefly; do not assume mastery"
+}

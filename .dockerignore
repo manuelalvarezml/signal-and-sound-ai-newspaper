@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!requirements.txt
+!newspaper/
+!newspaper/**
+!config/
+!config/**
+!web/
+!web/**
+**/__pycache__/
+
+config/interests.json

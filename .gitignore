@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+private/
+state/
+dist/
+.aws-sam/
+tmp/
+
+config/interests.json
+preview-*.jpg
+.DS_Store
+samconfig.toml
