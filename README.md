@@ -2,6 +2,8 @@
 
 A small, self-hosted AI newspaper designed to be read, printed, and put down. Two sections—General AI and AI for Music—become responsive web pages and one two-page A4 PDF. Python, static HTML/CSS, and a compact AWS serverless pipeline.
 
+Read the [live newspaper](https://d27kukj7weob2m.cloudfront.net/) or browse the [edition archive](https://d27kukj7weob2m.cloudfront.net/archive.html).
+
 ## What it does
 
 - Six source-linked stories per page, roughly 60% broad news and 40% interest-related coverage.
@@ -36,9 +38,9 @@ Edit the ignored config/interests.json to personalize topic weights. The public 
 .venv/bin/python -m newspaper status
 ```
 
-Feeds and direct public sources work without search credentials. Optional BRAVE_API_KEY and X_BEARER_TOKEN add discovery. Automated writing uses Amazon Bedrock and requires an authorized AWS identity. Never commit tokens. Deployed tokens are read from encrypted SSM parameters; the reusable source does not contain credentials.
+Feeds and direct public sources work without search credentials. Optional BRAVE_API_KEY and X_BEARER_TOKEN add discovery. [Brave Search API](https://brave.com/search/api/) supplies optional web discovery; source articles remain the evidence. Choose its Search plan and keep paid replenishment disabled for the default free-credit budget. Automated writing uses Amazon Bedrock and requires an authorized AWS identity. Never commit tokens. Deployed tokens are read from encrypted SSM parameters; the reusable source does not contain credentials. See [source setup and selection](infra/SOURCES.md).
 
-The analysis extracts evidence, composes an edition and performs an automated evidence review. Validators check citations, dates, editorial balance and print constraints. Failed analysis or rendering keeps the previous issue live. Automated evidence review reduces errors but does not guarantee factual accuracy.
+Nova Micro extracts evidence and reviews claims; GPT-OSS 120B composes the edition through Amazon Bedrock. A bounded correction pass can repair invalid drafts before publication. Validators check citations, dates, editorial balance and print constraints. Failed analysis or rendering keeps the previous issue live. Automated evidence review reduces errors but does not guarantee factual accuracy.
 
 ## Architecture
 

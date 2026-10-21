@@ -149,3 +149,92 @@ def test_refined_print_and_web_layout(tmp_path,edition):
         for cid in ids:
             concept=next(c for c in edition.concepts if c.id==cid)
             assert concept.why_it_matters in text.replace('\n',' ')
+
+
+def test_publisher_serializes_and_releases_after_failure(tmp_path,monkeypatch):
+    from newspaper import handlers
+    from newspaper.state import claim
+    state=State(tmp_path/'state')
+    monkeypatch.setattr(handlers,'runtime',lambda: ({},state,None))
+    assert claim(state,'publication-lock',150)
+    with pytest.raises(RuntimeError,match='Publication busy'):
+        handlers.publisher({},None)
+    state.mutate('run:publication-lock',lambda v: ({'status':'idle','lease_until':0},None))
+    def fail(*args):raise ValueError('render failure')
+    monkeypatch.setattr(handlers,'_publish',fail)
+    with pytest.raises(ValueError,match='render failure'):
+        handlers.publisher({},None)
+    assert claim(state,'publication-lock',150)
+
+
+def test_editorial_revision_preserves_earlier_source_cutoff(tmp_path,edition):
+    from datetime import timedelta
+    render(edition,tmp_path)
+    corrected=edition.model_copy(deep=True)
+    corrected.revision+=1
+    corrected.cutoff-=timedelta(minutes=1)
+    render(corrected,tmp_path)
+    pointer=json.loads((tmp_path/'latest.json').read_text())['daily']
+    assert pointer['revision']==corrected.revision
+    older=edition.model_copy(deep=True)
+    older.cutoff+=timedelta(minutes=1)
+    render(older,tmp_path/'other')
+    # A later timestamp cannot downgrade an already-published revision.
+    (tmp_path/'other'/'latest.json').write_text(json.dumps({'daily':pointer}))
+    render(older,tmp_path/'other')
+    assert json.loads((tmp_path/'other'/'latest.json').read_text())['daily']==pointer
+
+
+def test_composer_corrects_invalid_draft_once(tmp_path,edition,monkeypatch):
+    from newspaper.compose import Composer
+    import boto3
+    bad=edition.model_dump(mode='json');bad['pages'][0]['stories']=bad['pages'][0]['stories'][:2]
+    responses=[{'items':[]},bad,edition.model_dump(mode='json'),{'supported':True,'issues':[]}]
+    class Fake:
+        calls=0
+        def converse(self,**kwargs):
+            value=responses[self.calls];self.calls+=1
+            return {'stopReason':'end_turn','output':{'message':{'content':[{'text':json.dumps(value)}]}},'usage':{'inputTokens':100,'outputTokens':100}}
+    fake=Fake();monkeypatch.setattr(boto3,'client',lambda *a,**kw:fake)
+    state=State(tmp_path/'state');store=Store(tmp_path/'evidence')
+    composer=Composer(config('settings'),Budget(state,config('settings')),store,edition.id)
+    result=composer.compose({'records':[s.model_dump() for s in edition.sources],'coverage_notes':[]},config('interests'),edition.cutoff,'daily',[])
+    assert len(result.pages[0].stories)==6 and fake.calls==4
+    assert store.json(f'checkpoints/{edition.id}/write-gptoss-repair-response.json')
+
+
+def test_composer_normalizes_page_local_concepts(edition):
+    from newspaper.compose import Composer
+    raw=edition.model_dump(mode='json');raw['pages'][0]['concepts']=raw['concepts'];raw['concepts']=[]
+    result=Composer.validate(raw,{},[s.model_dump() for s in edition.sources])
+    assert result.concepts==edition.concepts
+    assert 'concepts' in raw['pages'][0]  # Normalization does not mutate cached evidence.
+
+
+def test_composer_attaches_original_evidence_for_verification(edition):
+    from newspaper.compose import Composer
+    raw=edition.model_dump(mode='json');story=raw['pages'][0]['stories'][0];story['evidence']={}
+    records=[s.model_dump() for s in edition.sources]
+    result=Composer.validate(raw,{},records)
+    sid=story['source_ids'][0]
+    assert result.pages[0].stories[0].evidence[sid].endswith(next(s['excerpt'][:1200] for s in records if s['id']==sid))
+
+
+def test_composer_labels_old_and_undated_sources(edition):
+    from newspaper.compose import Composer
+    raw=edition.model_dump(mode='json');story=raw['pages'][0]['stories'][0];story['status']='New'
+    sid=story['source_ids'][0];records=[s.model_dump() for s in edition.sources]
+    for source in records:
+        if source['id']==sid:source['published']='2020-01-01'
+    assert Composer.validate(raw,{},records).pages[0].stories[0].status=='Revisited'
+    for source in records:
+        if source['id']==sid:source['published']=None
+    assert Composer.validate(raw,{},records).pages[0].stories[0].status=='Learning'
+
+
+def test_pdf_handles_model_typographic_spaces_and_hyphens(tmp_path,edition):
+    from newspaper.render import typography
+    edited=edition.model_copy(deep=True)
+    edited.pages[0].stories[0].title='Low\u2011latency tools for RealTime\u202f2'
+    target=render(edited,tmp_path)
+    assert typography(edited.pages[0].stories[0].title) in PdfReader(target/'signal-and-sound.pdf').pages[0].extract_text().replace('\n',' ')

@@ -23,7 +23,6 @@ Conditions:
 Globals:
   Function:
     Architectures: [arm64]
-    ReservedConcurrentExecutions: 1
     Environment:
       Variables:
         PRODUCTION_ENABLED: !Ref ProductionEnabled
@@ -72,20 +71,6 @@ Resources:
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
-  CachePolicy:
-    Type: AWS::CloudFront::CachePolicy
-    Properties:
-      CachePolicyConfig:
-        Name: !Sub '${AWS::StackName}-cache'
-        MinTTL: 0
-        DefaultTTL: 0
-        MaxTTL: 31536000
-        ParametersInCacheKeyAndForwardedToOrigin:
-          EnableAcceptEncodingGzip: true
-          EnableAcceptEncodingBrotli: true
-          CookiesConfig: {CookieBehavior: none}
-          HeadersConfig: {HeaderBehavior: none}
-          QueryStringsConfig: {QueryStringBehavior: none}
   CDN:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -107,7 +92,7 @@ Resources:
           AllowedMethods: [GET, HEAD]
           CachedMethods: [GET, HEAD]
           Compress: true
-          CachePolicyId: !Ref CachePolicy
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # AWS managed CachingOptimized; Free-plan compatible
   WebACL:
     Type: AWS::WAFv2::WebACL
     Properties:
@@ -164,7 +149,7 @@ Resources:
               Action: bedrock:InvokeModel
               Resource:
                 - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0'
-                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0'
+                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/openai.gpt-oss-120b-1:0'
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/signal-and-sound/*'

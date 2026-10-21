@@ -4,7 +4,7 @@ import shutil
 import hashlib
 import tempfile
 import math
-from datetime import datetime
+import unicodedata
 from pathlib import Path
 from html import escape
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -33,6 +33,8 @@ def public_edition(edition):
 
 
 def typography(text):
+    text = unicodedata.normalize("NFKC", text)
+    text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
     return text.replace("—", "-").replace("–", "-").replace("’", "'").replace("“", '"').replace("”", '"')
 
 
@@ -176,7 +178,7 @@ def render(edition: Edition, dist: Path, site_url="http://localhost:8787"):
     pointer = json.loads(pointer_path.read_text()) if pointer_path.exists() else {}
     old = pointer.get(edition.kind)
     new = {"id": edition.id, "date": edition.date, "revision": edition.revision, "cutoff": edition.cutoff.isoformat(), "pages": links, "pdf": "/" + str(release / pdf_name)}
-    if not old or (edition.cutoff, edition.revision) >= (datetime.fromisoformat(old["cutoff"]), old["revision"]):
+    if not old or (edition.date, edition.revision) >= (old['date'], old['revision']):
         pointer[edition.kind] = new
     tmp = dist / "latest.tmp"
     tmp.write_text(json.dumps(pointer, indent=2))

@@ -1,28 +1,52 @@
-# Deployment handoff — not executed
+# AWS deployment
 
-Manuel must approve public AWS launch after reviewing the local style and content. Keep ProductionEnabled=false and DeliveryEnabled=false until then. This repository contains no live credentials.
+Use a personal AWS account and explicit deployment authorization. The stack has two Lambdas, a daily EventBridge schedule, two private S3 buckets, a DynamoDB budget/state table, CloudFront origin access control, the AWS-managed CachingOptimized policy, and a Free pricing subscription with a WAF association. Deployment creates IAM roles scoped to these services. No public S3 bucket or paid domain is required.
 
-## Build and verify after approval
+## Build and release
 
-1. Run local tests and inspect both PDF pages. Install/use AWS SAM and Docker; `sam build --template-file infra/template.yaml --use-container` builds the two image functions from the locked requirements. CloudFormation/SAM service validation and a Docker build remain launch checks; they were not available during this local preview.
-2. Confirm region/model access, current Bedrock prices, X per-post charges and the Brave free-credit account settings. Disable paid search replenishment. Connect optional tokens as encrypted SSM parameters under `/signal-and-sound/`. Do not put credentials in template parameters, source control or logs. Default SSM-managed encryption is assumed; a customer KMS key needs a scoped decrypt grant.
-3. Deploy the stack in us-east-1 with both enable parameters false. No public delivery or analysis should run at this stage. Review resource changes and account budget permissions.
-4. Verify/enroll the CloudFront distribution in the Free flat-rate plan before enabling delivery. The template intentionally does not claim PriceClass_100 is a free plan: it is not. Free-plan eligibility and enrollment must be checked in AWS. If the account is ineligible, pause launch for a cost decision. Official docs: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/flat-rate-pricing-plan.html and https://docs.aws.amazon.com/PricingPlanManager/latest/UserGuide/plans.html .
-5. Upload only `config/interests.json` to the private evidence bucket at `config/interests.json`. Never upload private/profile.md or raw Codex chats. An approved sanitized profile can be synchronized later using scripts/sync_interests.py. Update the Codex weekly heartbeat's upload authorization only after launch approval.
-6. Enable ProductionEnabled for a controlled smoke run, with DeliveryEnabled still false. Invoke Collector with an explicit kind/cutoff. Verify source coverage, actual Bedrock cost, evidence validation, PDF page count and publication objects. Confirm failure alarms and retain-last-good behavior. Verify endpoint 403 for direct S3 access and readable CloudFront output when delivery is enabled.
-7. Enable DeliveryEnabled only once Free flat-rate enrollment and public-content review are confirmed. Confirm the 06:00 America/Lima schedule. Monday daily and weekly analyses run sequentially; each completion invokes the publisher. Publisher concurrency is one, so pointer updates serialize.
-8. Configure an account AWS Budget alert at $5/$8/$10 using the user's chosen notification destination after it is supplied. CloudWatch error alarms exist without notification destinations. The application budget cannot enforce a hard account invoice ceiling. No email or SMS destination has been inferred.
+Requirements: Docker, AWS CLI, an authenticated AWS profile, and optionally SAM CLI for validation. Run tests and inspect the two PDF pages first.
 
-## Failure handling
+```sh
+sam validate --lint --template-file infra/template.yaml --region us-east-1
+docker buildx build --platform linux/arm64 --provenance=false --load -t signal-and-sound:release .
+```
 
-- Failed analysis: prior issue stays live; inspect bounded logs and the private checkpoint.
-- Failed rendering: publisher does not move latest.json; shorten editorial copy if print overflows.
-- Ambiguous paid request: reservation is retained; investigate before clearing it. Do not retry with a new identity simply to bypass a budget refusal.
-- Date identity makes scheduled analysis idempotent. Manual same-day revisions require an explicitly revised editorial JSON, not another paid automatic run.
-- Source outages are recorded. Fewer than four usable sources blocks automated composition. More sources are needed for a useful ten-brief issue; the writer may use labeled learning context but cannot invent news.
-- Turn ProductionEnabled=false to stop analysis. Delivery can continue serving existing static editions. DeliveryEnabled=false disables public delivery separately.
-- No VPC/NAT, database server, user authentication service or paid domain is required. Public output is intentionally anonymous editorial copy.
+Create a private ECR repository for this project, log Docker in using `aws ecr get-login-password` piped to `docker login --password-stdin`, tag the release with your repository URI, and push it. Keep credentials out of command arguments and logs. Retain only a few images using an ECR lifecycle policy.
 
-## Cost assumptions to verify
+Prepare the deployment template with the pushed image URI:
 
-The configured $8 application stop reserves $1 for infrastructure and caps Bedrock at $2 and X at $1.60/month. Reservations use conservative text token bounds, then reconcile reported usage. Search calls stop at 500/month and assume free credits with no recharge. CloudFront Free plan covers eligible delivery within its terms; other AWS services, image storage and logs still have costs. Keep one small image per function and apply ECR retention after SAM image repositories exist. Recheck current prices before enabling anything.
+```sh
+python -m scripts.prepare_deploy --image-uri YOUR_ECR_URI:RELEASE --output private/deploy-template.json
+aws cloudformation deploy --template-file private/deploy-template.json \
+  --stack-name signal-and-sound --region us-east-1 \
+  --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+  --parameter-overrides ProductionEnabled=false DeliveryEnabled=false
+```
+
+Both functions share one image and use separate entry points. Publication uses a DynamoDB lease rather than reserved concurrency, so accounts with the default low Lambda quota are supported. The standard SAM build path is also supported; the direct Docker path avoids legacy Docker-builder issues on Apple Silicon.
+
+## Enable the service
+
+1. Keep the managed cache policy: custom caching rules require a higher plan tier. Mutable pointers use no-cache headers; the managed policy imposes a one-second minimum cache lifetime. Confirm CloudFront Free-plan enrollment and the completed stack before enabling delivery. The template's subscription resource specifies FREE, not a paid plan. Its resource-scoped lint exemption accommodates older cfn-lint catalogs; CloudFormation itself must validate the resource. Official reference: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-pricingplanmanager-subscription.html . If the account is ineligible, resolve that before public launch.
+2. Confirm access to the configured Bedrock models and current provider prices. Defaults use Nova Micro for extraction/review and GPT-OSS 120B for writing, both through Bedrock in us-east-1. Optional Brave/X credentials belong in encrypted SSM parameters under `/signal-and-sound/`; pass their parameter names to the stack. Paid search replenishment must remain disabled. No source credential is mandatory for the feed-only mode.
+3. Upload only sanitized config/interests.json to the EvidenceBucket output at config/interests.json. Never upload biography or raw Codex chats. The sync helper requires an explicit post-approval flag and an authorized AWS profile.
+4. Enable ProductionEnabled and smoke-test analysis and publishing. A manually reviewed edition can be saved privately under editions/ID.json and published by invoking PublisherFunction with an edition_key. The publisher creates attachment and inline PDF variants with explicit HTTP Content-Disposition headers.
+5. Enable DeliveryEnabled after validation. Check both pages and anonymous PDF retrieval over HTTPS, including a phone-width browser test. Actual printing uses the device's native PDF share/print interface; the app cannot verify a physical printer.
+6. Verify the 06:00 America/Lima schedule. Monday daily and weekly runs execute sequentially. The first weekly edition covers October 21–25, 2026; change started_at for another installation.
+
+## Interest review integration
+
+AWS cannot read local Codex chats. A local Monday 05:30 Codex automation may inspect human-authorized work and update private beliefs, then upload only sanitized topic weights to this project's evidence bucket. Keep the full biography and observation log local. Explicit preferences override inference; automated reminders do not count as evidence. Version history supports reversal.
+
+## Failure handling and rollback
+
+- Failed analysis: the last good public issue remains live; inspect bounded logs and private checkpoints. Model responses are saved privately before validation. One bounded correction pass can repair an invalid draft; every paid stage remains budgeted. Source dates determine New/Revisited labels, and original source excerpts back citation provenance.
+- Failed rendering: latest.json is not changed. Shorten copy if the print layout overflows.
+- Ambiguous paid request: keep its reservation and investigate before reissuing it. Do not generate a fresh identity to evade a budget refusal.
+- Scheduled runs are idempotent by edition date. Editorial corrections increment the revision.
+- Set ProductionEnabled=false to stop new analysis. Existing static editions can remain readable. DeliveryEnabled controls public delivery separately.
+- Restore an earlier latest.json version or release pointer to roll back an edition; immutable edition URLs remain available.
+
+## Costs and limits
+
+Defaults target $5/month, with an $8 estimated application stop, a $1 infrastructure reserve, a $2 Bedrock cap and a $1.60 X cap. Search stops at 500 calls/month and assumes free credits. These are application estimates, not an AWS invoice guarantee. The Free CloudFront plan covers eligible delivery under its terms; S3, Lambda, image storage and logs have separate usage. Verify current rates and use account budget alerts with a user-selected notification destination. Error alarms have no inferred email/SMS recipients.

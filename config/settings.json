@@ -7,7 +7,7 @@
   "target_usd": 5,
   "stop_usd": 8,
   "infrastructure_reserve_usd": 1.0,
-  "x_monthly_usd": 1.60,
+  "x_monthly_usd": 1.6,
   "bedrock_monthly_usd": 2.0,
   "max_sources": 50,
   "max_candidates": 300,
@@ -17,11 +17,18 @@
   "x_daily_posts": 10,
   "region": "us-east-1",
   "extract_model": "amazon.nova-micro-v1:0",
-  "compose_model": "amazon.nova-pro-v1:0",
+  "compose_model": "openai.gpt-oss-120b-1:0",
   "production_enabled": false,
   "site_url": "http://localhost:8787",
   "prices_per_million": {
-    "amazon.nova-micro-v1:0": [0.035, 0.14],
-    "amazon.nova-pro-v1:0": [0.8, 3.2]
-  }
+    "amazon.nova-micro-v1:0": [
+      0.035,
+      0.14
+    ],
+    "openai.gpt-oss-120b-1:0": [
+      0.15,
+      0.6
+    ]
+  },
+  "write_max_tokens": 16000
 }

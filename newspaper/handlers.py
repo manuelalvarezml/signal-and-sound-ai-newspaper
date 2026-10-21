@@ -6,7 +6,7 @@ from .pipeline import config,analyze
 from .interests import ZONE
 from .models import Edition
 from .render import render
-from .state import DynamoState,Store
+from .state import DynamoState,Store,claim
 
 
 def runtime():
@@ -43,6 +43,15 @@ def collector(event,context):
 
 def publisher(event,context):
     settings,state,evidence=runtime()
+    if not claim(state,'publication-lock',seconds=150):
+        raise RuntimeError('Publication busy; retry after current render')
+    try:
+        return _publish(event,settings,evidence)
+    finally:
+        state.mutate('run:publication-lock',lambda v: ({**v,'status':'idle','lease_until':0},None))
+
+
+def _publish(event,settings,evidence):
     edition=Edition.model_validate(evidence.json(event['edition_key']))
     public=Store(bucket=os.environ['PUBLIC_BUCKET'])
     with tempfile.TemporaryDirectory() as directory:
