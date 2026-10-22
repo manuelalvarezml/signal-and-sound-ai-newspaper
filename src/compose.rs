@@ -10,6 +10,48 @@ use std::{collections::BTreeMap, sync::Arc};
 const SYSTEM: &str = include_str!("../prompts/system.txt");
 const INSTRUCTION: &str = include_str!("../prompts/instruction.txt");
 
+pub fn structured_schema(mut schema: Value) -> Value {
+    fn visit(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                for key in [
+                    "default",
+                    "minimum",
+                    "maximum",
+                    "minItems",
+                    "maxItems",
+                    "minLength",
+                    "maxLength",
+                    "pattern",
+                ] {
+                    map.remove(key);
+                }
+                if map.get("type").and_then(Value::as_str) == Some("object") {
+                    map.insert("additionalProperties".into(), json!(false));
+                    let fields = map
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .map(|p| p.keys().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    map.entry("properties").or_insert(json!({}));
+                    map.insert("required".into(), json!(fields));
+                }
+                for child in map.values_mut() {
+                    visit(child);
+                }
+            }
+            Value::Array(items) => {
+                for child in items {
+                    visit(child);
+                }
+            }
+            _ => {}
+        }
+    }
+    visit(&mut schema);
+    schema
+}
+
 pub fn parse_model_json(content: &str) -> Result<Value> {
     let text = content.trim();
     let text = if text.starts_with("```json") || text.starts_with("```\n") {
@@ -52,7 +94,26 @@ impl Composer<'_> {
             r
         } else {
             self.budget.reserve(&key, "bedrock", reservation).await?;
-            let r=self.aws.json("bedrock",None,&format!("/model/{model}/converse"),&json!({"system":[{"text":SYSTEM}],"messages":[{"role":"user","content":[{"text":prompt}]}],"inferenceConfig":{"maxTokens":maximum,"temperature":0}})).await?;
+            let mut request = json!({"system":[{"text":SYSTEM}],"messages":[{"role":"user","content":[{"text":prompt}]}],"inferenceConfig":{"maxTokens":maximum,"temperature":0}});
+            if model.starts_with("openai.") {
+                let schema = if stage.starts_with("write-") {
+                    structured_schema(serde_json::from_str(include_str!(
+                        "../config/edition.schema.json"
+                    ))?)
+                } else {
+                    json!({"type":"object","properties":{"supported":{"type":"boolean"},"issues":{"type":"array","items":{"type":"string"}}},"required":["supported","issues"],"additionalProperties":false})
+                };
+                request["outputConfig"] = json!({"textFormat":{"type":"json_schema","structure":{"jsonSchema":{"schema":serde_json::to_string(&schema)?,"name":"newspaper_response"}}}});
+            }
+            let r = self
+                .aws
+                .json(
+                    "bedrock",
+                    None,
+                    &format!("/model/{model}/converse"),
+                    &request,
+                )
+                .await?;
             self.store.put_json(&response_key, &r).await?;
             r
         };
@@ -140,11 +201,11 @@ impl Composer<'_> {
             .collect::<Vec<_>>();
         let payload = json!({"instructions":instruction,"metadata":metadata,"interests":crate::interests::sanitized(profile),"candidate_topics":topics,"sources":short,"past_editions":history,"schema":serde_json::from_str::<Value>(include_str!("../config/edition.schema.json"))?});
         let mut prompt = payload.clone();
-        for attempt in 0..2 {
-            let stage = if attempt == 0 {
-                "write-rust-v3"
-            } else {
-                "write-rust-v3-repair"
+        for attempt in 0..3 {
+            let stage = match attempt {
+                0 => "write-rust-v5",
+                1 => "write-rust-v5-repair",
+                _ => "write-rust-v5-repair-final",
             };
             let raw = self
                 .call(
@@ -164,7 +225,7 @@ impl Composer<'_> {
                     let sources=edition.sources.iter().filter(|s| cited.contains(&s.id)).collect::<Vec<_>>();
                     let concept_ids=page.stories.iter().flat_map(|s| &s.concepts).collect::<std::collections::HashSet<_>>();
                     let concepts=edition.concepts.iter().filter(|c|concept_ids.contains(&c.id)).collect::<Vec<_>>();
-                    let stage=format!("verify-rust-v3-{}{}",page.id,if attempt==0{""}else{"-repair"});
+                    let stage=format!("verify-rust-v5-{}-{attempt}",page.id);
                     let verdict=self.call(&stage,self.settings["review_model"].as_str().unwrap_or(self.settings["compose_model"].as_str().unwrap()),&json!({"instruction":"Act as a skeptical fact checker. Review ONLY published_text and concepts against cited_original_evidence. Check every factual assertion, quantity, unit, date, attribution and limitation, including the implication sentences. Each story must be supported by its own source_ids; a source title alone is insufficient evidence for detailed claims. Detect contradictions, invented specifications, local/cloud confusion, latency versus relative speedup confusion, and overstated guarantees. Original evidence is the authority; the writer and its extracted digest are fallible. Return exactly one JSON object {supported:boolean,issues:[string]}. Give precise unsupported claims, story IDs, and corrections supported by the cited source. A vendor's reported result must remain attributed. Clearly conditional practical suggestions are allowed. Set supported false if any factual claim lacks support or contradicts its source. Do not evaluate assertions merely quoted within the original source excerpts as newspaper text.","published_text":public["pages"][n],"concepts":concepts,"cited_original_evidence":sources}),6000).await?;
                     if verdict["supported"]!=true || !verdict["issues"].as_array().is_some_and(Vec::is_empty) {
                         issues.push(json!({"page":page.id,"issues":verdict["issues"]}));
@@ -174,7 +235,7 @@ impl Composer<'_> {
             }.await;
             match validated {
                 Ok(e) => return Ok(e),
-                Err(e) if attempt == 0 => {
+                Err(e) if attempt < 2 => {
                     prompt = payload.clone();
                     prompt["correction"] = json!(e.to_string());
                     prompt["previous_draft"] = raw;
@@ -235,6 +296,12 @@ pub fn normalize(mut raw: Value, metadata: &Value, records: &[Source]) -> Result
             .as_array_mut()
             .ok_or_else(|| anyhow::anyhow!("Missing stories"))?
         {
+            if story["source_ids"].is_null()
+                && let Some(evidence) = story["evidence"].as_object()
+                && !evidence.is_empty()
+            {
+                story["source_ids"] = json!(evidence.keys().collect::<Vec<_>>());
+            }
             let ids = story["source_ids"]
                 .as_array()
                 .ok_or_else(|| anyhow::anyhow!("Missing citations"))?
@@ -275,6 +342,35 @@ pub fn normalize(mut raw: Value, metadata: &Value, records: &[Source]) -> Result
         }
     }
     raw["sources"] = json!(wanted.into_values().collect::<Vec<_>>());
+    let mut concept_sources = BTreeMap::new();
+    for page in raw["pages"].as_array().unwrap() {
+        for story in page["stories"].as_array().unwrap() {
+            for concept in story["concepts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if let Some(source) = story["source_ids"][0]
+                    .as_str()
+                    .and_then(|id| source_map.get(id))
+                {
+                    concept_sources
+                        .entry(concept.to_string())
+                        .or_insert(source.url.clone());
+                }
+            }
+        }
+    }
+    for concept in raw["concepts"].as_array_mut().unwrap() {
+        if crate::model::safe_url(concept["url"].as_str().unwrap_or("")).is_err()
+            && let Some(url) = concept["id"]
+                .as_str()
+                .and_then(|id| concept_sources.get(id))
+        {
+            concept["url"] = json!(url);
+        }
+    }
     let edition: Edition = serde_json::from_value(raw)?;
     edition.validate()?;
     Ok(edition)

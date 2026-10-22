@@ -46,7 +46,7 @@ EventBridge Scheduler — 06:00 America/Lima
       → private publication S3 → CloudFront
 ```
 
-DynamoDB provides atomic cost reservations and leases. API responses are checkpointed before parsing/validation so retries reuse paid results. Failed or ambiguous requests retain their reservations. The last valid edition stays readable if a later run fails. Publication writes the latest pointer last; old revisions remain immutable. PDF attachment and inline print/share routes have explicit Content-Disposition headers.
+DynamoDB provides atomic cost reservations and leases. API responses are checkpointed before parsing/validation so retries reuse paid results. Writing and review use [Bedrock native JSON-schema output](https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html), with separate Rust validation of factual citations and publishing constraints. Failed or ambiguous requests retain their reservations. The last valid edition stays readable if a later run fails. Publication writes the latest pointer last; old revisions remain immutable. PDF attachment and inline print/share routes have explicit Content-Disposition headers.
 
 Daily editions have six stories per page: four broad and two tailored to sanitized technical/artistic interests. Broad stories occupy roughly 60% of story words. Source publication dates, evidence maps, status labels and concept definitions are validated. A Trend needs two distinct dated source URLs. Retrieval text is untrusted evidence, never instructions; HTML is escaped and Typst reads strings from JSON rather than executing generated markup.
 

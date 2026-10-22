@@ -37,6 +37,32 @@ fn model_json_preserves_rejection_despite_trailing_prose() {
     assert!(compose::parse_model_json("[]").is_err());
 }
 #[test]
+fn native_schema_requires_citations_and_leaves_evidence_attachment_to_rust() {
+    let schema = compose::structured_schema(
+        serde_json::from_str(include_str!("../config/edition.schema.json")).unwrap(),
+    );
+    assert_eq!(schema["additionalProperties"], false);
+    assert!(
+        schema["$defs"]["Story"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("source_ids"))
+    );
+    assert_eq!(
+        schema["$defs"]["Story"]["properties"]["evidence"]["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        schema["$defs"]["Story"]["properties"]["evidence"]["properties"],
+        json!({})
+    );
+    assert!(
+        schema["$defs"]["Page"]["properties"]["stories"]
+            .get("minItems")
+            .is_none()
+    );
+}
+#[test]
 fn invalid_citations_and_future_dates_fail() {
     let mut e = edition();
     e.pages[0].stories[0].source_ids = vec!["invented".into()];
@@ -246,6 +272,42 @@ fn normalize_grounds_original_evidence() {
     assert!(!e.pages[0].stories[0].evidence.is_empty());
 }
 #[test]
+fn missing_concept_link_uses_a_cited_original_source() {
+    let e = edition();
+    let mut raw = serde_json::to_value(&e).unwrap();
+    let concept = e.concepts[0].id.clone();
+    let story = e
+        .pages
+        .iter()
+        .flat_map(|p| &p.stories)
+        .find(|s| s.concepts.contains(&concept))
+        .unwrap();
+    let expected = e
+        .sources
+        .iter()
+        .find(|s| s.id == story.source_ids[0])
+        .unwrap()
+        .url
+        .clone();
+    raw["concepts"][0]["url"] = json!("");
+    raw["subtitle"] = json!("Discarded legacy decoration");
+    raw.as_object_mut().unwrap().remove("note");
+    let normalized = compose::normalize(raw, &json!({}), &e.sources).unwrap();
+    assert_eq!(
+        normalized
+            .concepts
+            .iter()
+            .find(|c| c.id == concept)
+            .unwrap()
+            .url,
+        expected
+    );
+    assert_eq!(
+        normalized.pages[0].stories[0].paragraphs,
+        e.pages[0].stories[0].paragraphs
+    );
+}
+#[test]
 fn typst_pdf_web_and_immutable_archive() {
     let tmp = tempfile::tempdir().unwrap();
     let e = edition();
@@ -391,21 +453,21 @@ async fn truncated_extraction_reuses_bounded_recovery_checkpoint() {
         .unwrap();
     store
         .put_json(
-            "checkpoints/recovery/write-rust-v3.json",
+            "checkpoints/recovery/write-rust-v5.json",
             &serde_json::to_value(&e).unwrap(),
         )
         .await
         .unwrap();
     store
         .put_json(
-            "checkpoints/recovery/verify-rust-v3-ai.json",
+            "checkpoints/recovery/verify-rust-v5-ai-0.json",
             &json!({"supported":true,"issues":[]}),
         )
         .await
         .unwrap();
     store
         .put_json(
-            "checkpoints/recovery/verify-rust-v3-music.json",
+            "checkpoints/recovery/verify-rust-v5-music-0.json",
             &json!({"supported":true,"issues":[]}),
         )
         .await

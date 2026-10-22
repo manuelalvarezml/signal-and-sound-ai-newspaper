@@ -40,7 +40,7 @@ AWS cannot read local Codex chats. A local Monday 05:30 Codex automation may ins
 
 ## Failure handling and rollback
 
-- Failed analysis: the last good public issue remains live; inspect bounded logs and private checkpoints. Model responses are saved privately before validation. One bounded compact extraction can recover a truncated/invalid extraction response, and one bounded correction pass can repair an invalid draft; every paid stage remains budgeted. Source dates determine New/Revisited labels, and original source excerpts back citation provenance.
+- Failed analysis: the last good public issue remains live; inspect bounded logs and private checkpoints. Model responses are saved privately before validation. One bounded compact extraction can recover a truncated/invalid extraction response. Writing and review use native Bedrock JSON-schema output; Rust still enforces citations, word allocation, dates and PDF size. Up to two correction passes can repair an invalid draft; every paid stage remains budgeted. Source dates determine New/Revisited labels, and original source excerpts back citation provenance.
 - Failed rendering: latest.json is not changed. Shorten copy if the print layout overflows.
 - Ambiguous paid request: keep its reservation and investigate before reissuing it. Do not generate a fresh identity to evade a budget refusal.
 - Scheduled runs are idempotent by edition date. Editorial corrections increment the revision.
