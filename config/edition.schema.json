@@ -1,0 +1,362 @@
+{
+  "$defs": {
+    "Concept": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "term": {
+          "title": "Term",
+          "type": "string"
+        },
+        "definition": {
+          "title": "Definition",
+          "type": "string"
+        },
+        "why_it_matters": {
+          "default": "",
+          "title": "Why It Matters",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "term",
+        "definition",
+        "url"
+      ],
+      "title": "Concept",
+      "type": "object"
+    },
+    "Page": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": [
+            "ai",
+            "music"
+          ],
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "subtitle": {
+          "title": "Subtitle",
+          "type": "string"
+        },
+        "lead": {
+          "title": "Lead",
+          "type": "string"
+        },
+        "stories": {
+          "items": {
+            "$ref": "#/$defs/Story"
+          },
+          "maxItems": 6,
+          "minItems": 2,
+          "title": "Stories",
+          "type": "array"
+        },
+        "takeaway": {
+          "title": "Takeaway",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "subtitle",
+        "lead",
+        "stories",
+        "takeaway"
+      ],
+      "title": "Page",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "publisher": {
+          "title": "Publisher",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "published": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Published"
+        },
+        "retrieved_at": {
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "excerpt": {
+          "default": "",
+          "title": "Excerpt",
+          "type": "string"
+        },
+        "page": {
+          "default": "ai",
+          "enum": [
+            "ai",
+            "music"
+          ],
+          "title": "Page",
+          "type": "string"
+        },
+        "authority": {
+          "default": 0.8,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Authority",
+          "type": "number"
+        },
+        "event_id": {
+          "default": "",
+          "title": "Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "publisher",
+        "url",
+        "retrieved_at"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "Story": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "kicker": {
+          "title": "Kicker",
+          "type": "string"
+        },
+        "lane": {
+          "enum": [
+            "broad",
+            "personal"
+          ],
+          "title": "Lane",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "New",
+            "Recent",
+            "Revisited",
+            "Learning",
+            "Early signal",
+            "Trend"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "paragraphs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Paragraphs",
+          "type": "array"
+        },
+        "implication": {
+          "title": "Implication",
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "concepts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Concepts",
+          "type": "array"
+        },
+        "evidence": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "kicker",
+        "lane",
+        "status",
+        "paragraphs",
+        "implication",
+        "source_ids"
+      ],
+      "title": "Story",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "pattern": "^(daily|weekly)-\\d{4}-\\d{2}-\\d{2}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "revision": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "kind": {
+      "enum": [
+        "daily",
+        "weekly"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "date": {
+      "title": "Date",
+      "type": "string"
+    },
+    "cutoff": {
+      "format": "date-time",
+      "title": "Cutoff",
+      "type": "string"
+    },
+    "coverage_start": {
+      "format": "date-time",
+      "title": "Coverage Start",
+      "type": "string"
+    },
+    "week_start": {
+      "title": "Week Start",
+      "type": "string"
+    },
+    "inaugural": {
+      "default": false,
+      "title": "Inaugural",
+      "type": "boolean"
+    },
+    "partial_week": {
+      "default": false,
+      "title": "Partial Week",
+      "type": "boolean"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "note": {
+      "title": "Note",
+      "type": "string"
+    },
+    "coverage_notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Coverage Notes",
+      "type": "array"
+    },
+    "profile_version": {
+      "title": "Profile Version",
+      "type": "string"
+    },
+    "editor": {
+      "default": "AI-assisted, source-checked",
+      "title": "Editor",
+      "type": "string"
+    },
+    "pages": {
+      "items": {
+        "$ref": "#/$defs/Page"
+      },
+      "title": "Pages",
+      "type": "array"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/Source"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "concepts": {
+      "items": {
+        "$ref": "#/$defs/Concept"
+      },
+      "title": "Concepts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "date",
+    "cutoff",
+    "coverage_start",
+    "week_start",
+    "title",
+    "note",
+    "coverage_notes",
+    "profile_version",
+    "pages",
+    "sources",
+    "concepts"
+  ],
+  "title": "Edition",
+  "type": "object"
+}

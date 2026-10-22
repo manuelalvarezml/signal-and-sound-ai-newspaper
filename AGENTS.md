@@ -6,7 +6,7 @@ Each daily and weekly edition has two pages: general AI and AI for Music. Use si
 
 Do not publish private biography, claims unsupported by sources, or future-dated news. Keep explicit user preferences durable and inferred updates bounded and reversible. Automated reminder frequency and silence do not establish interests. Record source provenance privately.
 
-Run `.venv/bin/python -m pytest -q` after meaningful changes. Validate SAM infrastructure before deployment. Visually check both PDF pages and mobile layouts. PDFs must remain exactly two A4 pages, with readable body text, editor notes and estimated reading time. Increment revisions when editing a published edition; old revisions remain immutable.
+Run `cargo test --locked` (with Typst on PATH) after meaningful changes. Validate SAM infrastructure before deployment. Visually check both PDF pages and mobile layouts. PDFs must remain exactly two A4 pages, with readable body text, editor notes and estimated reading time. Increment revisions when editing a published edition; old revisions remain immutable.
 
 AWS deployment requires explicit user authorization. The owner authorized GitHub publication and AWS launch in this conversation on October 21, 2026. Apply changes only to this project's resources and personal deployment profile. Keep all public downloads anonymous and same-origin, with separate attachment and inline PDF routes. Do not send messages to third parties.
 

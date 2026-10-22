@@ -12,3 +12,5 @@ config/interests.json
 preview-*.jpg
 .DS_Store
 samconfig.toml
+
+target/

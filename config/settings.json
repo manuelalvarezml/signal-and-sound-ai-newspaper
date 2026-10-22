@@ -30,5 +30,7 @@
       0.6
     ]
   },
-  "write_max_tokens": 16000
+  "write_max_tokens": 16000,
+  "search_monthly_usd": 3.0,
+  "exa_request_reserve_usd": 0.02
 }

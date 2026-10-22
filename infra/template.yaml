@@ -11,7 +11,7 @@ Parameters:
     Default: 'false'
     AllowedValues: ['true', 'false']
     Description: Enable only after verifying the CloudFront Free flat-rate plan
-  BraveKeyParameter:
+  ExaKeyParameter:
     Type: String
     Default: ''
   XTokenParameter:
@@ -134,11 +134,12 @@ Resources:
       PackageType: Image
       MemorySize: 512
       Timeout: 900
-      ImageConfig: {Command: [newspaper.handlers.collector]}
+      ImageConfig: {Command: [collector]}
       Environment:
         Variables:
+          APP_ROLE: collector
           PUBLISHER_FUNCTION: !Ref Publisher
-          BRAVE_API_KEY_PARAMETER: !Ref BraveKeyParameter
+          EXA_API_KEY_PARAMETER: !Ref ExaKeyParameter
           X_BEARER_TOKEN_PARAMETER: !Ref XTokenParameter
       Policies:
         - S3CrudPolicy: {BucketName: !Ref Evidence}
@@ -168,9 +169,12 @@ Resources:
     Metadata: {DockerTag: publisher, DockerContext: '..', Dockerfile: Dockerfile}
     Properties:
       PackageType: Image
-      MemorySize: 256
+      MemorySize: 512
       Timeout: 120
-      ImageConfig: {Command: [newspaper.handlers.publisher]}
+      ImageConfig: {Command: []}
+      Environment:
+        Variables:
+          APP_ROLE: publisher
       Policies:
         - S3ReadPolicy: {BucketName: !Ref Evidence}
         - S3CrudPolicy: {BucketName: !Ref Publication}
