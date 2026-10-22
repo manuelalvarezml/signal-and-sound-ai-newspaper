@@ -1,6 +1,6 @@
 use crate::{
     aws::Aws,
-    model::Edition,
+    model::{Edition, Source},
     state::{Budget, State, Store},
 };
 use anyhow::{Result, ensure};
@@ -14,6 +14,55 @@ pub struct Runtime {
     pub state: State,
     pub evidence: Store,
     pub public: Store,
+}
+/// Balance the completed week's evidence with a small, dated context sample.
+/// Never send an unbounded month of full source text to the model.
+pub fn weekly_sources(
+    records: Vec<Source>,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
+    limit: usize,
+) -> Vec<Source> {
+    let mut dated = records
+        .into_iter()
+        .filter_map(|s| {
+            let date = s.published.as_ref()?;
+            let date = DateTime::parse_from_rfc3339(date)
+                .or_else(|_| DateTime::parse_from_rfc3339(&format!("{date}T00:00:00-05:00")))
+                .ok()?;
+            (date < end && date >= start - chrono::Duration::days(28)).then_some((date, s))
+        })
+        .collect::<Vec<_>>();
+    dated.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
+    let mut result = vec![];
+    let mut urls = std::collections::HashSet::new();
+    for page in ["ai", "music"] {
+        let quota = limit / 2;
+        let context = quota / 5;
+        let mut selected = vec![];
+        for (old, count) in [(false, quota - context), (true, context)] {
+            selected.extend(
+                dated
+                    .iter()
+                    .filter(|(d, s)| s.page == page && (*d < start) == old)
+                    .filter(|(_, s)| urls.insert(crate::collect::canonical(&s.url)))
+                    .take(count)
+                    .map(|(_, s)| s.clone()),
+            );
+        }
+        if selected.len() < quota {
+            selected.extend(
+                dated
+                    .iter()
+                    .filter(|(_, s)| s.page == page)
+                    .filter(|(_, s)| urls.insert(crate::collect::canonical(&s.url)))
+                    .take(quota - selected.len())
+                    .map(|(_, s)| s.clone()),
+            );
+        }
+        result.extend(selected);
+    }
+    result
 }
 impl Runtime {
     pub async fn cloud() -> Result<Self> {
@@ -101,21 +150,20 @@ impl Runtime {
                     for s in old["sources"].as_array().unwrap() {
                         historical_sources.insert(s["id"].as_str().unwrap().into(), s.clone());
                     }
-                    let mut old = old;
-                    for s in old["sources"].as_array_mut().unwrap() {
-                        s.as_object_mut().unwrap().remove("excerpt");
-                    }
-                    for p in old["pages"].as_array_mut().unwrap() {
-                        for s in p["stories"].as_array_mut().unwrap() {
-                            s.as_object_mut().unwrap().remove("evidence");
-                        }
-                    }
-                    history.push(old);
+                    // Keep archive context bounded as the publication grows. Original
+                    // evidence, when cited, comes from the separate source records.
+                    let stories = old["pages"].as_array().unwrap().iter().flat_map(|p| {
+                        p["stories"].as_array().unwrap().iter().map(|s| json!({
+                            "title":s["title"],"status":s["status"],"source_ids":s["source_ids"],
+                            "summary":s["paragraphs"][0].as_str().unwrap_or("").chars().take(320).collect::<String>()
+                        }))
+                    }).collect::<Vec<_>>();
+                    history.push(json!({"id":old["id"],"date":date,"stories":stories}));
                 }
             }
         }
         if kind == "weekly" {
-            let (_, end, _) = crate::interests::coverage(
+            let (start, end, _) = crate::interests::coverage(
                 at,
                 kind,
                 self.settings["started_at"].as_str().unwrap(),
@@ -123,14 +171,16 @@ impl Runtime {
             for s in collection["records"].as_array().unwrap() {
                 historical_sources.insert(s["id"].as_str().unwrap().into(), s.clone());
             }
-            collection["records"] = json!(
-                historical_sources
-                    .into_values()
-                    .filter(|s| s["published"].as_str().is_some_and(|d| d
-                        .get(..10)
-                        .is_some_and(|d| d < end.date_naive().to_string().as_str())))
-                    .collect::<Vec<_>>()
-            );
+            let sources = historical_sources
+                .into_values()
+                .map(serde_json::from_value)
+                .collect::<std::result::Result<Vec<Source>, _>>()?;
+            collection["records"] = json!(weekly_sources(
+                sources,
+                start,
+                end,
+                self.settings["max_sources"].as_u64().unwrap_or(50) as usize
+            ));
         }
         let edition = crate::compose::Composer {
             aws: self.aws.clone(),

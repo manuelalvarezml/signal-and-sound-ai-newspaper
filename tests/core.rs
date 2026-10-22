@@ -28,6 +28,15 @@ fn compatible_edition_and_private_redaction() {
     }));
 }
 #[test]
+fn model_json_preserves_rejection_despite_trailing_prose() {
+    let verdict=compose::parse_model_json("```json\n{\"supported\":false,\"issues\":[\"unsupported latency\"]}\n```\nAdditional explanation").unwrap();
+    assert_eq!(verdict["supported"], false);
+    assert_eq!(verdict["issues"][0], "unsupported latency");
+    assert!(compose::parse_model_json("{\"supported\":true").is_err());
+    assert!(compose::parse_model_json("I think it is supported").is_err());
+    assert!(compose::parse_model_json("[]").is_err());
+}
+#[test]
 fn invalid_citations_and_future_dates_fail() {
     let mut e = edition();
     e.pages[0].stories[0].source_ids = vec!["invented".into()];
@@ -65,6 +74,45 @@ fn first_and_normal_week() {
     .unwrap();
     assert_eq!(s.date_naive().to_string(), "2026-10-26");
     assert!(!partial);
+}
+#[test]
+fn weekly_evidence_is_bounded_balanced_and_excludes_the_new_week() {
+    let start = chrono::DateTime::parse_from_rfc3339("2026-10-26T00:00:00-05:00").unwrap();
+    let end = start + chrono::Duration::days(7);
+    let mut records = vec![];
+    for page in ["ai", "music"] {
+        for n in 0..70 {
+            let mut s = edition().sources[0].clone();
+            s.id = format!("{page}-{n}");
+            s.url = format!("https://example.org/{page}/{n}");
+            s.page = page.into();
+            s.published = Some((end - chrono::Duration::hours(n * 6)).to_rfc3339());
+            records.push(s);
+        }
+    }
+    let selected = signal_and_sound::pipeline::weekly_sources(records, start, end, 50);
+    assert_eq!(selected.len(), 50);
+    for page in ["ai", "music"] {
+        let sources = selected
+            .iter()
+            .filter(|s| s.page == page)
+            .collect::<Vec<_>>();
+        assert_eq!(sources.len(), 25);
+        assert_eq!(
+            sources
+                .iter()
+                .filter(
+                    |s| chrono::DateTime::parse_from_rfc3339(s.published.as_ref().unwrap())
+                        .unwrap()
+                        < start
+                )
+                .count(),
+            5
+        );
+        assert!(sources.iter().all(|s| {
+            chrono::DateTime::parse_from_rfc3339(s.published.as_ref().unwrap()).unwrap() < end
+        }));
+    }
 }
 #[test]
 fn exa_payload_has_bounded_windows() {
@@ -324,7 +372,10 @@ async fn truncated_extraction_reuses_bounded_recovery_checkpoint() {
     let store = Store::Local(tmp.path().join("evidence"));
     let settings = config("settings").unwrap();
     let budget = Budget::new(state, settings.clone());
-    let e = edition();
+    let mut e = edition();
+    for source in &mut e.sources {
+        source.excerpt = source.excerpt.repeat(4);
+    }
     let run = "recovery";
     budget
         .reserve("recovery:bedrock:extract", "bedrock", 0.1)
@@ -340,14 +391,21 @@ async fn truncated_extraction_reuses_bounded_recovery_checkpoint() {
         .unwrap();
     store
         .put_json(
-            "checkpoints/recovery/write-gptoss.json",
+            "checkpoints/recovery/write-rust-v3.json",
             &serde_json::to_value(&e).unwrap(),
         )
         .await
         .unwrap();
     store
         .put_json(
-            "checkpoints/recovery/verify-gptoss.json",
+            "checkpoints/recovery/verify-rust-v3-ai.json",
+            &json!({"supported":true,"issues":[]}),
+        )
+        .await
+        .unwrap();
+    store
+        .put_json(
+            "checkpoints/recovery/verify-rust-v3-music.json",
             &json!({"supported":true,"issues":[]}),
         )
         .await

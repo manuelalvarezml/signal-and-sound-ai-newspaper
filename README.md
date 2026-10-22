@@ -50,7 +50,7 @@ DynamoDB provides atomic cost reservations and leases. API responses are checkpo
 
 Daily editions have six stories per page: four broad and two tailored to sanitized technical/artistic interests. Broad stories occupy roughly 60% of story words. Source publication dates, evidence maps, status labels and concept definitions are validated. A Trend needs two distinct dated source URLs. Retrieval text is untrusted evidence, never instructions; HTML is escaped and Typst reads strings from JSON rather than executing generated markup.
 
-Monday also creates a digest of the completed Monday–Sunday week, comparing earlier editions. The inaugural week is October 21–25, 2026. The daily run starts at 06:00 Lima, and rendering follows successful analysis.
+Monday also creates a digest of the completed Monday–Sunday week, comparing earlier editions. Archive summaries and original evidence are bounded: up to 50 sources balanced across both pages, with a small sample from the previous 28 days for context. The inaugural week is October 21–25, 2026. The daily run starts at 06:00 Lima, and rendering follows successful analysis.
 
 ## Private interests
 

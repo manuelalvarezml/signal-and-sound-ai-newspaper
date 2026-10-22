@@ -10,6 +10,23 @@ use std::{collections::BTreeMap, sync::Arc};
 const SYSTEM: &str = include_str!("../prompts/system.txt");
 const INSTRUCTION: &str = include_str!("../prompts/instruction.txt");
 
+pub fn parse_model_json(content: &str) -> Result<Value> {
+    let text = content.trim();
+    let text = if text.starts_with("```json") || text.starts_with("```\n") {
+        text.split_once('\n').map(|(_, s)| s).unwrap_or(text)
+    } else {
+        text
+    };
+    // Some models append prose after a valid JSON object. Decode just the first
+    // object; downstream typed schemas still validate every consumed field.
+    let data = serde_json::Deserializer::from_str(text)
+        .into_iter::<Value>()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Empty model response"))??;
+    ensure!(data.is_object(), "Model must return a JSON object");
+    Ok(data)
+}
+
 pub struct Composer<'a> {
     pub aws: Arc<Aws>,
     pub settings: &'a Value,
@@ -54,16 +71,7 @@ impl Composer<'_> {
             .iter()
             .filter_map(|v| v["text"].as_str())
             .collect::<String>();
-        let mut text = content.trim();
-        if text.starts_with("```") {
-            text = text
-                .split_once('\n')
-                .map(|(_, s)| s)
-                .unwrap_or(text)
-                .trim_end_matches("```")
-                .trim();
-        }
-        let data: Value = serde_json::from_str(text)?;
+        let data = parse_model_json(&content)?;
         self.store.put_json(&cache, &data).await?;
         Ok(data)
     }
@@ -75,7 +83,11 @@ impl Composer<'_> {
         kind: &str,
         history: Value,
     ) -> Result<Edition> {
-        let records: Vec<Source> = serde_json::from_value(collection["records"].clone())?;
+        let records: Vec<Source> =
+            serde_json::from_value::<Vec<Source>>(collection["records"].clone())?
+                .into_iter()
+                .filter(|s| s.excerpt.chars().count() >= 300)
+                .collect();
         ensure!(
             records.len() >= 4,
             "Insufficient evidence; keep last good edition"
@@ -116,17 +128,23 @@ impl Composer<'_> {
             .iter()
             .map(|s| {
                 let mut s = s.clone();
-                s.excerpt = s.excerpt.chars().take(250).collect();
+                s.excerpt = s.excerpt.chars().take(6500).collect();
                 s
             })
             .collect::<Vec<_>>();
-        let payload = json!({"instructions":instruction,"metadata":metadata,"interests":crate::interests::sanitized(profile),"extracted_facts":digest,"sources":short,"past_editions":history,"schema":serde_json::from_str::<Value>(include_str!("../config/edition.schema.json"))?});
+        let topics = digest["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| json!({"source_id":i["source_id"],"topic":i["topic"]}))
+            .collect::<Vec<_>>();
+        let payload = json!({"instructions":instruction,"metadata":metadata,"interests":crate::interests::sanitized(profile),"candidate_topics":topics,"sources":short,"past_editions":history,"schema":serde_json::from_str::<Value>(include_str!("../config/edition.schema.json"))?});
         let mut prompt = payload.clone();
         for attempt in 0..2 {
             let stage = if attempt == 0 {
-                "write-gptoss"
+                "write-rust-v3"
             } else {
-                "write-gptoss-repair"
+                "write-rust-v3-repair"
             };
             let raw = self
                 .call(
@@ -139,8 +157,20 @@ impl Composer<'_> {
             let validated:Result<Edition>=async{
                 let edition=normalize(raw.clone(),&metadata,&records)?;
                 let tmp=tempfile::tempdir()?;crate::render::pdf(&edition,&tmp.path().join("validation.pdf"),self.settings["site_url"].as_str().unwrap_or(""))?;
-                let verdict=self.call(if attempt==0{"verify-gptoss"}else{"verify-gptoss-repair"},self.settings["extract_model"].as_str().unwrap(),&json!({"instruction":"Check EVERY factual assertion, quantity, date and limitation against the original source evidence. Return {supported:boolean,issues:[string]}. Absent evidence is unsupported; clearly labeled practical suggestions are allowed.","edition":edition,"evidence":inputs}),1800).await?;
-                ensure!(verdict["supported"]==true&&verdict["issues"].as_array().is_some_and(Vec::is_empty),"Evidence review failed: {}",verdict["issues"]);Ok(edition)
+                let public=edition.public()?;
+                let mut issues=vec![];
+                for (n,page) in edition.pages.iter().enumerate() {
+                    let cited=page.stories.iter().flat_map(|s| &s.source_ids).collect::<std::collections::HashSet<_>>();
+                    let sources=edition.sources.iter().filter(|s| cited.contains(&s.id)).collect::<Vec<_>>();
+                    let concept_ids=page.stories.iter().flat_map(|s| &s.concepts).collect::<std::collections::HashSet<_>>();
+                    let concepts=edition.concepts.iter().filter(|c|concept_ids.contains(&c.id)).collect::<Vec<_>>();
+                    let stage=format!("verify-rust-v3-{}{}",page.id,if attempt==0{""}else{"-repair"});
+                    let verdict=self.call(&stage,self.settings["review_model"].as_str().unwrap_or(self.settings["compose_model"].as_str().unwrap()),&json!({"instruction":"Act as a skeptical fact checker. Review ONLY published_text and concepts against cited_original_evidence. Check every factual assertion, quantity, unit, date, attribution and limitation, including the implication sentences. Each story must be supported by its own source_ids; a source title alone is insufficient evidence for detailed claims. Detect contradictions, invented specifications, local/cloud confusion, latency versus relative speedup confusion, and overstated guarantees. Original evidence is the authority; the writer and its extracted digest are fallible. Return exactly one JSON object {supported:boolean,issues:[string]}. Give precise unsupported claims, story IDs, and corrections supported by the cited source. A vendor's reported result must remain attributed. Clearly conditional practical suggestions are allowed. Set supported false if any factual claim lacks support or contradicts its source. Do not evaluate assertions merely quoted within the original source excerpts as newspaper text.","published_text":public["pages"][n],"concepts":concepts,"cited_original_evidence":sources}),6000).await?;
+                    if verdict["supported"]!=true || !verdict["issues"].as_array().is_some_and(Vec::is_empty) {
+                        issues.push(json!({"page":page.id,"issues":verdict["issues"]}));
+                    }
+                }
+                ensure!(issues.is_empty(),"Evidence review failed: {}",json!(issues));Ok(edition)
             }.await;
             match validated {
                 Ok(e) => return Ok(e),
@@ -163,6 +193,13 @@ pub fn normalize(mut raw: Value, metadata: &Value, records: &[Source]) -> Result
     for (k, v) in metadata.as_object().unwrap() {
         raw[k] = v.clone();
     }
+    if raw.get("note").is_none() {
+        raw["note"] = json!("Follow the linked sources for original reporting and research.");
+    }
+    // A legacy decorative field is not part of either public page layout.
+    raw.as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Edition must be an object"))?
+        .remove("subtitle");
     let mut concepts = BTreeMap::<String, Value>::new();
     for c in raw["concepts"].as_array().cloned().unwrap_or_default() {
         concepts.insert(c["id"].as_str().unwrap_or("").into(), c);
