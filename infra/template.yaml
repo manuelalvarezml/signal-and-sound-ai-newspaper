@@ -161,6 +161,16 @@ Resources:
           Properties:
             ScheduleExpression: cron(0 6 * * ? *)
             ScheduleExpressionTimezone: America/Lima
+            Input: '{"kind":"daily"}'
+            State: !If [Production, ENABLED, DISABLED]
+            FlexibleTimeWindow: {Mode: 'OFF'}
+            RetryPolicy: {MaximumRetryAttempts: 0}
+        WeeklyDigest:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 6 ? * MON *)
+            ScheduleExpressionTimezone: America/Lima
+            Input: '{"kind":"weekly"}'
             State: !If [Production, ENABLED, DISABLED]
             FlexibleTimeWindow: {Mode: 'OFF'}
             RetryPolicy: {MaximumRetryAttempts: 0}

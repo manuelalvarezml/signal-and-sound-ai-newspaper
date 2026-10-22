@@ -37,7 +37,7 @@
   v(5pt)
   line(length: 100%, stroke: 1.3pt + ink)
   v(7pt)
-  text(size: 9.5pt)[*EDITOR'S NOTE* #h(4pt) #page.lead]
+  text(size: 9.5pt)[*EDITOR'S NOTE* #h(4pt) *Today* #h(4pt) #page.lead.replace(regex("^Today['’]s "), "")]
   v(10pt)
   let broad = page.stories.filter(s => s.lane == "broad")
   let personal = page.stories.filter(s => s.lane == "personal")
@@ -50,7 +50,8 @@
   v(5pt)
   text(size: 8pt, fill: accent, weight: "bold")[CONCEPTS TO KEEP]
   v(6pt)
-  let ids = page.stories.map(s => s.concepts).flatten().dedup().slice(0, 2)
+  let all-ids = page.stories.map(s => s.concepts).flatten().dedup()
+  let ids = all-ids.slice(0, calc.min(2, all-ids.len()))
   grid(columns: (1fr, 1fr), column-gutter: 7mm, ..ids.map(id => {
     let c = concepts.at(id)
     block(breakable: false)[

@@ -176,6 +176,16 @@ impl Edition {
         let mut seen = HashSet::new();
         for p in &self.pages {
             ensure!(
+                p.stories
+                    .iter()
+                    .flat_map(|s| &s.concepts)
+                    .collect::<HashSet<_>>()
+                    .len()
+                    >= 2,
+                "{}: at least two explained concepts required",
+                p.id
+            );
+            ensure!(
                 p.stories.len() == 6
                     && p.stories.iter().filter(|s| s.lane == "broad").count() == 4
                     && p.stories.iter().filter(|s| s.lane == "personal").count() == 2,

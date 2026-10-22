@@ -35,7 +35,7 @@ The weekly command requires a completed publication week. Direct feeds work with
 ## Architecture
 
 ```text
-EventBridge Scheduler — 06:00 America/Lima
+EventBridge Scheduler — daily + Monday digest, 06:00 America/Lima
   → Rust collector Lambda
       → RSS / source websites / public APIs + Exa
       → private evidence checkpoints in S3

@@ -54,11 +54,19 @@ pub fn structured_schema(mut schema: Value) -> Value {
 
 pub fn parse_model_json(content: &str) -> Result<Value> {
     let text = content.trim();
-    let text = if text.starts_with("```json") || text.starts_with("```\n") {
+    let mut text = if text.starts_with("```json") || text.starts_with("```\n") {
         text.split_once('\n').map(|(_, s)| s).unwrap_or(text)
     } else {
         text
     };
+    // Bedrock's constrained open-weight response can duplicate its opening
+    // brace. Remove only a keyless duplicate prefix, never any JSON field.
+    while let Some(rest) = text.trim_start().strip_prefix('{') {
+        if !rest.trim_start().starts_with('{') {
+            break;
+        }
+        text = rest.trim_start();
+    }
     // Some models append prose after a valid JSON object. Decode just the first
     // object; downstream typed schemas still validate every consumed field.
     let data = serde_json::Deserializer::from_str(text)
@@ -67,6 +75,54 @@ pub fn parse_model_json(content: &str) -> Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("Empty model response"))??;
     ensure!(data.is_object(), "Model must return a JSON object");
     Ok(data)
+}
+
+pub fn apply_editorial_patch(mut draft: Value, patch: &Value, allowed: &[String]) -> Result<Value> {
+    for changed in patch["stories"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Missing story patches"))?
+    {
+        let id = changed["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing patch ID"))?;
+        ensure!(
+            allowed.iter().any(|s| s == id),
+            "Repair attempted to change an unflagged story"
+        );
+        let story = draft["pages"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .flat_map(|p| p["stories"].as_array_mut().unwrap())
+            .find(|s| s["id"] == id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown patched story"))?;
+        *story = changed.clone();
+    }
+    for changed in patch["concepts"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Missing concept patches"))?
+    {
+        let concept = draft["concepts"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|c| c["id"] == changed["id"])
+            .ok_or_else(|| anyhow::anyhow!("Unknown patched concept"))?;
+        *concept = changed.clone();
+    }
+    for changed in patch["leads"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Missing lead patches"))?
+    {
+        let page = draft["pages"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p["id"] == changed["id"])
+            .ok_or_else(|| anyhow::anyhow!("Unknown patched page"))?;
+        page["lead"] = changed["lead"].clone();
+    }
+    Ok(draft)
 }
 
 pub struct Composer<'a> {
@@ -78,6 +134,16 @@ pub struct Composer<'a> {
 }
 impl Composer<'_> {
     async fn call(&self, stage: &str, model: &str, prompt: &Value, maximum: u64) -> Result<Value> {
+        let stage = if stage.starts_with("patch-") || stage.starts_with("verify-rust-v7") {
+            format!(
+                "{stage}-{}",
+                &crate::hash(&serde_json::to_vec(
+                    &json!({"model":model,"prompt":prompt,"system":SYSTEM,"maximum":maximum})
+                )?)[..16]
+            )
+        } else {
+            stage.into()
+        };
         let cache = format!("checkpoints/{}/{stage}.json", self.run_id);
         if let Some(c) = self.store.json(&cache).await? {
             return Ok(c);
@@ -100,6 +166,14 @@ impl Composer<'_> {
                     structured_schema(serde_json::from_str(include_str!(
                         "../config/edition.schema.json"
                     ))?)
+                } else if stage.starts_with("patch-") {
+                    let base: Value =
+                        serde_json::from_str(include_str!("../config/edition.schema.json"))?;
+                    structured_schema(json!({"type":"object","properties":{
+                        "stories":{"type":"array","items":{"$ref":"#/$defs/Story"}},
+                        "concepts":{"type":"array","items":{"$ref":"#/$defs/Concept"}},
+                        "leads":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"lead":{"type":"string"}}}}
+                    },"$defs":base["$defs"]}))
                 } else {
                     json!({"type":"object","properties":{"supported":{"type":"boolean"},"issues":{"type":"array","items":{"type":"string"}}},"required":["supported","issues"],"additionalProperties":false})
                 };
@@ -200,21 +274,15 @@ impl Composer<'_> {
             .map(|i| json!({"source_id":i["source_id"],"topic":i["topic"]}))
             .collect::<Vec<_>>();
         let payload = json!({"instructions":instruction,"metadata":metadata,"interests":crate::interests::sanitized(profile),"candidate_topics":topics,"sources":short,"past_editions":history,"schema":serde_json::from_str::<Value>(include_str!("../config/edition.schema.json"))?});
-        let mut prompt = payload.clone();
+        let mut raw = self
+            .call(
+                "write-rust-v5",
+                self.settings["compose_model"].as_str().unwrap(),
+                &payload,
+                self.settings["write_max_tokens"].as_u64().unwrap_or(16000),
+            )
+            .await?;
         for attempt in 0..3 {
-            let stage = match attempt {
-                0 => "write-rust-v5",
-                1 => "write-rust-v5-repair",
-                _ => "write-rust-v5-repair-final",
-            };
-            let raw = self
-                .call(
-                    stage,
-                    self.settings["compose_model"].as_str().unwrap(),
-                    &prompt,
-                    self.settings["write_max_tokens"].as_u64().unwrap_or(16000),
-                )
-                .await?;
             let validated:Result<Edition>=async{
                 let edition=normalize(raw.clone(),&metadata,&records)?;
                 let tmp=tempfile::tempdir()?;crate::render::pdf(&edition,&tmp.path().join("validation.pdf"),self.settings["site_url"].as_str().unwrap_or(""))?;
@@ -225,7 +293,7 @@ impl Composer<'_> {
                     let sources=edition.sources.iter().filter(|s| cited.contains(&s.id)).collect::<Vec<_>>();
                     let concept_ids=page.stories.iter().flat_map(|s| &s.concepts).collect::<std::collections::HashSet<_>>();
                     let concepts=edition.concepts.iter().filter(|c|concept_ids.contains(&c.id)).collect::<Vec<_>>();
-                    let stage=format!("verify-rust-v5-{}-{attempt}",page.id);
+                    let stage=format!("verify-rust-{}-{}-{attempt}",if attempt==0{"v5"}else{"v7"},page.id);
                     let verdict=self.call(&stage,self.settings["review_model"].as_str().unwrap_or(self.settings["compose_model"].as_str().unwrap()),&json!({"instruction":"Act as a skeptical fact checker. Review ONLY published_text and concepts against cited_original_evidence. Check every factual assertion, quantity, unit, date, attribution and limitation, including the implication sentences. Each story must be supported by its own source_ids; a source title alone is insufficient evidence for detailed claims. Detect contradictions, invented specifications, local/cloud confusion, latency versus relative speedup confusion, and overstated guarantees. Original evidence is the authority; the writer and its extracted digest are fallible. Return exactly one JSON object {supported:boolean,issues:[string]}. Give precise unsupported claims, story IDs, and corrections supported by the cited source. A vendor's reported result must remain attributed. Clearly conditional practical suggestions are allowed. Set supported false if any factual claim lacks support or contradicts its source. Do not evaluate assertions merely quoted within the original source excerpts as newspaper text.","published_text":public["pages"][n],"concepts":concepts,"cited_original_evidence":sources}),6000).await?;
                     if verdict["supported"]!=true || !verdict["issues"].as_array().is_some_and(Vec::is_empty) {
                         issues.push(json!({"page":page.id,"issues":verdict["issues"]}));
@@ -236,13 +304,50 @@ impl Composer<'_> {
             match validated {
                 Ok(e) => return Ok(e),
                 Err(e) if attempt < 2 => {
-                    prompt = payload.clone();
-                    prompt["correction"] = json!(e.to_string());
-                    prompt["previous_draft"] = raw;
-                    prompt["previous_draft"]["sources"] = json!([]);
-                    prompt["repair_instruction"] = json!(
-                        "Correct the validation problem, preserve only supported claims, return full corrected edition. Word counts INCLUDE implication. Aim for 170-185 broad words and 115-125 personal words on each page. Use six stories. Shorten if PDF overflows; do not shrink fonts. Set sources to []."
-                    );
+                    let error = e.to_string();
+                    let allowed = raw["pages"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|p| p["stories"].as_array().unwrap())
+                        .filter(|s| {
+                            !error.starts_with("Evidence review failed")
+                                || error.contains(s["id"].as_str().unwrap())
+                                || s["source_ids"].as_array().is_some_and(|ids| {
+                                    ids.iter()
+                                        .filter_map(Value::as_str)
+                                        .any(|id| error.contains(id))
+                                })
+                        })
+                        .map(|s| s["id"].as_str().unwrap().to_string())
+                        .collect::<Vec<_>>();
+                    let flagged = raw["pages"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|p| p["stories"].as_array().unwrap())
+                        .filter(|s| allowed.iter().any(|id| s["id"] == *id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let cited = flagged
+                        .iter()
+                        .flat_map(|s| s["source_ids"].as_array().into_iter().flatten())
+                        .filter_map(Value::as_str)
+                        .collect::<std::collections::HashSet<_>>();
+                    let evidence = records
+                        .iter()
+                        .filter(|s| cited.is_empty() || cited.contains(s.id.as_str()))
+                        .collect::<Vec<_>>();
+                    let patch_prompt = json!({"instruction":"Repair only the flagged claims. Return {stories:[complete replacement Story objects for allowed_story_ids only],concepts:[only changed Concept objects],leads:[only changed {id,lead} page notes]}. Use empty arrays when no change is needed. Do not rewrite verified stories. Correct headlines and implications as well as paragraphs. Preserve IDs, source_ids, lane and concept references unless the validation issue explicitly concerns them. Narrow claims to what the original evidence actually demonstrates. Attribute results and state trust assumptions. Remove unsupported specifics rather than substituting new ones. Do not invent guarantees, affiliations, hardware, latency or deployments. Keep each replacement within about five words of its prior word count to preserve the page's 60/40 allocation. Keep at least two explained concepts per page. Set evidence to {}. Return only the patch JSON.","allowed_story_ids":allowed,"issues":error,"flagged_stories":flagged,"concepts":raw["concepts"],"original_sources":evidence});
+                    let patch = self
+                        .call(
+                            &format!("patch-rust-v7-{attempt}"),
+                            self.settings["compose_model"].as_str().unwrap(),
+                            &patch_prompt,
+                            16000,
+                        )
+                        .await?;
+                    raw = apply_editorial_patch(raw, &patch, &allowed)?;
                 }
                 Err(e) => return Err(e),
             }

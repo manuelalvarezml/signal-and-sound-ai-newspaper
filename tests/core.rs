@@ -35,6 +35,11 @@ fn model_json_preserves_rejection_despite_trailing_prose() {
     assert!(compose::parse_model_json("{\"supported\":true").is_err());
     assert!(compose::parse_model_json("I think it is supported").is_err());
     assert!(compose::parse_model_json("[]").is_err());
+    assert_eq!(
+        compose::parse_model_json("{\n {\"supported\":false,\"issues\":[\"unsupported claim\"]}")
+            .unwrap()["supported"],
+        false
+    );
 }
 #[test]
 fn native_schema_requires_citations_and_leaves_evidence_attachment_to_rust() {
@@ -61,6 +66,26 @@ fn native_schema_requires_citations_and_leaves_evidence_attachment_to_rust() {
             .get("minItems")
             .is_none()
     );
+}
+#[test]
+fn editorial_repairs_cannot_rewrite_unflagged_stories() {
+    let draft = serde_json::to_value(edition()).unwrap();
+    let mut story = draft["pages"][0]["stories"][0].clone();
+    story["title"] = json!("Corrected supported title");
+    let allowed = vec![story["id"].as_str().unwrap().to_string()];
+    let patch = json!({"stories":[story],"concepts":[],"leads":[]});
+    let result = compose::apply_editorial_patch(draft.clone(), &patch, &allowed).unwrap();
+    assert_eq!(
+        result["pages"][0]["stories"][0]["title"],
+        "Corrected supported title"
+    );
+    assert_eq!(
+        result["pages"][0]["stories"][1],
+        draft["pages"][0]["stories"][1]
+    );
+    assert_eq!(result["pages"][1], draft["pages"][1]);
+    assert_eq!(result["cutoff"], draft["cutoff"]);
+    assert!(compose::apply_editorial_patch(draft, &patch, &[]).is_err());
 }
 #[test]
 fn invalid_citations_and_future_dates_fail() {

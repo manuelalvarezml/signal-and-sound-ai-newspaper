@@ -1,6 +1,6 @@
 # AWS deployment
 
-Use a personal AWS account and explicit deployment authorization. The stack has two Lambdas, a daily EventBridge schedule, two private S3 buckets, a DynamoDB budget/state table, CloudFront origin access control, the AWS-managed CachingOptimized policy, and a Free pricing subscription with a WAF association. Deployment creates IAM roles scoped to these services. No public S3 bucket or paid domain is required.
+Use a personal AWS account and explicit deployment authorization. The stack has two Lambdas, daily and Monday EventBridge schedules, two private S3 buckets, a DynamoDB budget/state table, CloudFront origin access control, the AWS-managed CachingOptimized policy, and a Free pricing subscription with a WAF association. Deployment creates IAM roles scoped to these services. No public S3 bucket or paid domain is required.
 
 ## Build and release
 
@@ -32,7 +32,7 @@ Both functions share a Rust binary and Typst in one Debian container. APP_ROLE s
 3. Upload only sanitized config/interests.json to the EvidenceBucket output at config/interests.json. Never upload biography or raw Codex chats. Use EVIDENCE_BUCKET=YOUR_BUCKET AWS_PROFILE=YOUR_PROFILE cargo run --locked -- sync-interests after deployment authorization.
 4. Enable ProductionEnabled and smoke-test analysis and publishing. A manually reviewed edition can be saved privately under editions/ID.json and published by invoking PublisherFunction with an edition_key. The publisher creates attachment and inline PDF variants with explicit HTTP Content-Disposition headers.
 5. Enable DeliveryEnabled after validation. Check both pages and anonymous PDF retrieval over HTTPS, including a phone-width browser test. Actual printing uses the device's native PDF share/print interface; the app cannot verify a physical printer.
-6. Verify the 06:00 America/Lima schedule. Monday daily and weekly runs execute sequentially. The first weekly edition covers October 21–25, 2026; change started_at for another installation.
+6. Verify the 06:00 America/Lima schedules. A daily event and a Monday weekly event invoke the same collector separately, giving each analysis its own Lambda time limit. Each invokes the publisher after its analysis passes. The first weekly edition covers October 21–25, 2026; change started_at for another installation.
 
 ## Interest review integration
 
@@ -40,7 +40,7 @@ AWS cannot read local Codex chats. A local Monday 05:30 Codex automation may ins
 
 ## Failure handling and rollback
 
-- Failed analysis: the last good public issue remains live; inspect bounded logs and private checkpoints. Model responses are saved privately before validation. One bounded compact extraction can recover a truncated/invalid extraction response. Writing and review use native Bedrock JSON-schema output; Rust still enforces citations, word allocation, dates and PDF size. Up to two correction passes can repair an invalid draft; every paid stage remains budgeted. Source dates determine New/Revisited labels, and original source excerpts back citation provenance.
+- Failed analysis: the last good public issue remains live; inspect bounded logs and private checkpoints. Model responses are saved privately before validation. One bounded compact extraction can recover a truncated/invalid extraction response. Writing and review use native Bedrock JSON-schema output; Rust still enforces citations, word allocation, dates and PDF size. Up to two targeted correction passes can repair flagged stories; unflagged copy cannot be rewritten. Repairs and their subsequent reviews use content-derived checkpoint IDs so a verdict cannot be reused for different text. Every paid stage remains budgeted. Source dates determine New/Revisited labels, and original source excerpts back citation provenance.
 - Failed rendering: latest.json is not changed. Shorten copy if the print layout overflows.
 - Ambiguous paid request: keep its reservation and investigate before reissuing it. Do not generate a fresh identity to evade a budget refusal.
 - Scheduled runs are idempotent by edition date. Editorial corrections increment the revision.
