@@ -40,12 +40,14 @@ AWS cannot read local Codex chats. A local Monday 05:30 Codex automation may ins
 
 ## Failure handling and rollback
 
-- Failed analysis: the last good public issue remains live; inspect bounded logs and private checkpoints. Model responses are saved privately before validation. One bounded compact extraction can recover a truncated/invalid extraction response. Writing and review use native Bedrock JSON-schema output; Rust still enforces citations, word allocation, dates and PDF size. Up to two targeted correction passes can repair flagged stories; unflagged copy cannot be rewritten. Repairs and their subsequent reviews use content-derived checkpoint IDs so a verdict cannot be reused for different text. Every paid stage remains budgeted. Source dates determine New/Revisited labels, and original source excerpts back citation provenance.
+- Failed analysis: the last good public issue remains live. CloudWatch records run_started/run_succeeded/run_failed with request IDs; private failures/ records retain error details. Failed analyses release their lease, allowing the two bounded Lambda retries to resume checkpoints. Scheduler delivery also has two bounded retries. No notification recipient is assumed.
+- Source timestamps are filtered against the exact cutoff before writing, including when old collection checkpoints are replayed. Invalid or future-dated sources cannot enter a new edition. One bounded compact extraction can recover a truncated/invalid extraction response. Writing and review use native Bedrock JSON-schema output; Rust still enforces citations, word allocation, dates and PDF size. Up to four targeted correction passes can repair flagged stories; unflagged copy cannot be rewritten. All model checkpoints include a hash of their actual inputs so corrected evidence cannot reuse an old draft or verdict. Every paid stage remains budgeted.
 - Failed rendering: latest.json is not changed. Shorten copy if the print layout overflows.
 - Ambiguous paid request: keep its reservation and investigate before reissuing it. Do not generate a fresh identity to evade a budget refusal.
 - Scheduled runs are idempotent by edition date. Editorial corrections increment the revision.
 - Set ProductionEnabled=false to stop new analysis. Existing static editions can remain readable. DeliveryEnabled controls public delivery separately.
 - Restore an earlier latest.json version or release pointer to roll back an edition; immutable edition URLs remain available.
+- Bookmark the website root, /ai.html or /music.html for the latest daily edition. URLs under /editions/ are permanent historical editions and intentionally never advance to another date.
 
 ## Costs and limits
 

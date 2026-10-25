@@ -267,12 +267,7 @@ async fn parse_source(entry: Value, at: DateTime<FixedOffset>) -> Result<Vec<Sou
         }
         _ => bail!("Unknown source kind"),
     }
-    records.retain(|r| {
-        r.published.as_ref().is_none_or(|d| {
-            d.get(..10)
-                .is_some_and(|d| d <= at.date_naive().to_string().as_str())
-        })
-    });
+    records.retain(|r| crate::model::source_available_at(r.published.as_deref(), at));
     Ok(records)
 }
 fn extract_html(raw: &str, s: &mut Source) {
@@ -451,10 +446,7 @@ pub async fn collect(
     while let Some(r) = jobs.next().await {
         if let Some(r) = r {
             if !r.excerpt.is_empty()
-                && r.published.as_ref().is_none_or(|d| {
-                    d.get(..10)
-                        .is_some_and(|d| d <= at.date_naive().to_string().as_str())
-                })
+                && crate::model::source_available_at(r.published.as_deref(), at)
             {
                 records.push(r)
             }

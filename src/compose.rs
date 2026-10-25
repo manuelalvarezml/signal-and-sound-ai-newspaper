@@ -62,10 +62,12 @@ pub fn parse_model_json(content: &str) -> Result<Value> {
     // Bedrock's constrained open-weight response can duplicate its opening
     // brace. Remove only a keyless duplicate prefix, never any JSON field.
     while let Some(rest) = text.trim_start().strip_prefix('{') {
-        if !rest.trim_start().starts_with('{') {
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix('"').unwrap_or(rest).trim_start();
+        if !rest.starts_with('{') {
             break;
         }
-        text = rest.trim_start();
+        text = rest;
     }
     // Some models append prose after a valid JSON object. Decode just the first
     // object; downstream typed schemas still validate every consumed field.
@@ -132,18 +134,44 @@ pub struct Composer<'a> {
     pub store: &'a Store,
     pub run_id: &'a str,
 }
+fn stage_key(stage: &str, model: &str, prompt: &Value, maximum: u64) -> Result<String> {
+    Ok(format!(
+        "{stage}-v8-{}",
+        &crate::hash(&serde_json::to_vec(
+            &json!({"model":model,"prompt":prompt,"system":SYSTEM,"maximum":maximum})
+        )?)[..16]
+    ))
+}
 impl Composer<'_> {
     async fn call(&self, stage: &str, model: &str, prompt: &Value, maximum: u64) -> Result<Value> {
-        let stage = if stage.starts_with("patch-") || stage.starts_with("verify-rust-v7") {
-            format!(
-                "{stage}-{}",
-                &crate::hash(&serde_json::to_vec(
-                    &json!({"model":model,"prompt":prompt,"system":SYSTEM,"maximum":maximum})
-                )?)[..16]
-            )
-        } else {
-            stage.into()
-        };
+        match self.call_once(stage, model, prompt, maximum).await {
+            Err(error)
+                if error.is::<serde_json::Error>()
+                    || error.to_string() == "Model must return a JSON object" =>
+            {
+                // Regenerate malformed output once using the original evidence.
+                // Do not mistake a JSON formatting failure for a factual error
+                // and rewrite unrelated stories. Both responses remain cached.
+                let mut retry = prompt.clone();
+                retry["output_recovery"] = json!(
+                    "Your prior response could not be parsed as JSON. Answer the original request using one valid JSON object matching the required schema. No duplicated opening braces, commentary or markdown. Preserve all evidence requirements; do not assume approval."
+                );
+                self.call_once(&format!("{stage}-format-retry"), model, &retry, maximum)
+                    .await
+            }
+            result => result,
+        }
+    }
+    async fn call_once(
+        &self,
+        stage: &str,
+        model: &str,
+        prompt: &Value,
+        maximum: u64,
+    ) -> Result<Value> {
+        // Every stage is keyed by its exact inputs. A corrected source set or
+        // prompt must never reuse an incompatible writer/reviewer checkpoint.
+        let stage = stage_key(stage, model, prompt, maximum)?;
         let cache = format!("checkpoints/{}/{stage}.json", self.run_id);
         if let Some(c) = self.store.json(&cache).await? {
             return Ok(c);
@@ -218,10 +246,18 @@ impl Composer<'_> {
         kind: &str,
         history: Value,
     ) -> Result<Edition> {
+        let at = collection["cutoff"]
+            .as_str()
+            .map(DateTime::parse_from_rfc3339)
+            .transpose()?
+            .unwrap_or(at);
         let records: Vec<Source> =
             serde_json::from_value::<Vec<Source>>(collection["records"].clone())?
                 .into_iter()
-                .filter(|s| s.excerpt.chars().count() >= 300)
+                .filter(|s| {
+                    s.excerpt.chars().count() >= 300
+                        && crate::model::source_available_at(s.published.as_deref(), at)
+                })
                 .collect();
         ensure!(
             records.len() >= 4,
@@ -246,12 +282,6 @@ impl Composer<'_> {
             Err(error) => return Err(error),
         };
         ensure!(digest["items"].is_array(), "Invalid extraction schema");
-        let at = collection["cutoff"]
-            .as_str()
-            .map(DateTime::parse_from_rfc3339)
-            .transpose()?
-            .unwrap_or(at);
-
         let (start, end, partial) =
             crate::interests::coverage(at, kind, self.settings["started_at"].as_str().unwrap())?;
         let metadata = json!({"id":format!("{kind}-{}",at.date_naive()),"revision":1,"kind":kind,"date":at.date_naive().to_string(),"cutoff":at,"coverage_start":start,"week_start":crate::interests::week_start(at),"inaugural":at.date_naive().to_string()==self.settings["started_at"].as_str().unwrap()[..10],"partial_week":partial,"profile_version":profile["version"],"editor":"AI-assisted; automated evidence review","coverage_notes":collection["coverage_notes"]});
@@ -282,7 +312,7 @@ impl Composer<'_> {
                 self.settings["write_max_tokens"].as_u64().unwrap_or(16000),
             )
             .await?;
-        for attempt in 0..3 {
+        for attempt in 0..5 {
             let validated:Result<Edition>=async{
                 let edition=normalize(raw.clone(),&metadata,&records)?;
                 let tmp=tempfile::tempdir()?;crate::render::pdf(&edition,&tmp.path().join("validation.pdf"),self.settings["site_url"].as_str().unwrap_or(""))?;
@@ -303,8 +333,15 @@ impl Composer<'_> {
             }.await;
             match validated {
                 Ok(e) => return Ok(e),
-                Err(e) if attempt < 2 => {
-                    let error = e.to_string();
+                Err(e) if attempt < 4 => {
+                    let error = e
+                        .to_string()
+                        .replace(['\u{2011}', '\u{2010}', '\u{2013}'], "-");
+                    eprintln!(
+                        "Editorial validation attempt {} failed: {}",
+                        attempt + 1,
+                        error
+                    );
                     let allowed = raw["pages"]
                         .as_array()
                         .unwrap()
@@ -479,4 +516,89 @@ pub fn normalize(mut raw: Value, metadata: &Value, records: &[Source]) -> Result
     let edition: Edition = serde_json::from_value(raw)?;
     edition.validate()?;
     Ok(edition)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::State;
+
+    #[test]
+    fn cache_invalidates_changed_evidence_and_verdict_inputs() {
+        let original = json!({"sources":[{"id":"a","excerpt":"original"}]});
+        let corrected = json!({"sources":[{"id":"a","excerpt":"corrected"}]});
+        for stage in [
+            "extract",
+            "write-rust-v5",
+            "verify-rust-v5-ai-0",
+            "patch-rust-v7-0",
+        ] {
+            assert_eq!(
+                stage_key(stage, "model", &original, 8000).unwrap(),
+                stage_key(stage, "model", &original, 8000).unwrap()
+            );
+            assert_ne!(
+                stage_key(stage, "model", &original, 8000).unwrap(),
+                stage_key(stage, "model", &corrected, 8000).unwrap()
+            );
+            assert_ne!(
+                stage_key(stage, "model", &original, 8000).unwrap(),
+                stage_key(stage, "model", &original, 16000).unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_truncation_and_compact_recovery_do_not_repeat_paid_requests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = State::local(tmp.path().join("state")).unwrap();
+        let store = Store::Local(tmp.path().join("evidence"));
+        let settings = crate::config("settings").unwrap();
+        let budget = Budget::new(state, settings.clone());
+        let model = settings["extract_model"].as_str().unwrap();
+        let prompt = json!({"sources":["test evidence"]});
+        let stage = stage_key("extract", model, &prompt, 8000).unwrap();
+        let key = format!("recovery:bedrock:{stage}");
+        budget.reserve(&key, "bedrock", 0.1).await.unwrap();
+        store.put_json(&format!("checkpoints/recovery/{stage}-response.json"),&json!({"usage":{"inputTokens":100,"outputTokens":100},"stopReason":"max_tokens","output":{"message":{"content":[{"text":"incomplete"}]}}})).await.unwrap();
+        let compact = stage_key("extract-compact", model, &prompt, 6000).unwrap();
+        store
+            .put_json(
+                &format!("checkpoints/recovery/{compact}.json"),
+                &json!({"items":[]}),
+            )
+            .await
+            .unwrap();
+        let composer = Composer {
+            aws: Arc::new(Aws::new().await.unwrap()),
+            settings: &settings,
+            budget: &budget,
+            store: &store,
+            run_id: "recovery",
+        };
+        for _ in 0..2 {
+            assert!(
+                composer
+                    .call("extract", model, &prompt, 8000)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("truncated")
+            );
+            assert_eq!(
+                composer
+                    .call("extract-compact", model, &prompt, 6000)
+                    .await
+                    .unwrap(),
+                json!({"items":[]})
+            );
+        }
+        assert_eq!(
+            budget.state.read(&budget.key).await.unwrap()["requests"]
+                .as_object()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }

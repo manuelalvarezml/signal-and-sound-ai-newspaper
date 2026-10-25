@@ -114,88 +114,94 @@ impl Runtime {
             self.state.claim(&format!("analysis:{id}"), 900).await?,
             "Run active or completed"
         );
-        let profile = self
-            .evidence
-            .json("config/interests.json")
-            .await?
-            .unwrap_or(crate::config("interests")?);
-        let budget = Budget::new(self.state.clone(), self.settings.clone());
-        let mut collection = crate::collect::collect(
-            &crate::config("sources")?,
-            &self.settings,
-            &profile,
-            at,
-            &budget,
-            &self.evidence,
-            &id,
-            kind == "weekly",
-            exa,
-            x,
-        )
-        .await?;
-        let mut history = vec![];
-        let mut historical_sources = std::collections::BTreeMap::<String, Value>::new();
-        let lower = (at - chrono::Duration::days(35)).date_naive().to_string();
-        for key in self
-            .evidence
-            .keys("editions/")
-            .await?
-            .into_iter()
-            .rev()
-            .take(40)
-        {
-            if let Some(old) = self.evidence.json(&key).await? {
-                let date = old["date"].as_str().unwrap_or("");
-                if date >= lower.as_str() && date < at.date_naive().to_string().as_str() {
-                    for s in old["sources"].as_array().unwrap() {
-                        historical_sources.insert(s["id"].as_str().unwrap().into(), s.clone());
+        let result = async {
+            let profile = self
+                .evidence
+                .json("config/interests.json")
+                .await?
+                .unwrap_or(crate::config("interests")?);
+            let budget = Budget::new(self.state.clone(), self.settings.clone());
+            let mut collection = crate::collect::collect(
+                &crate::config("sources")?,
+                &self.settings,
+                &profile,
+                at,
+                &budget,
+                &self.evidence,
+                &id,
+                kind == "weekly",
+                exa,
+                x,
+            )
+            .await?;
+            let mut history = vec![];
+            let mut historical_sources = std::collections::BTreeMap::<String, Value>::new();
+            let lower = (at - chrono::Duration::days(35)).date_naive().to_string();
+            for key in self
+                .evidence
+                .keys("editions/")
+                .await?
+                .into_iter()
+                .rev()
+                .take(40)
+            {
+                if let Some(old) = self.evidence.json(&key).await? {
+                    let date = old["date"].as_str().unwrap_or("");
+                    if date >= lower.as_str() && date < at.date_naive().to_string().as_str() {
+                        for s in old["sources"].as_array().unwrap() {
+                            historical_sources.insert(s["id"].as_str().unwrap().into(), s.clone());
+                        }
+                        // Keep archive context bounded as the publication grows. Original
+                        // evidence, when cited, comes from the separate source records.
+                        let stories = old["pages"].as_array().unwrap().iter().flat_map(|p| {
+                            p["stories"].as_array().unwrap().iter().map(|s| json!({
+                                "title":s["title"],"status":s["status"],"source_ids":s["source_ids"],
+                                "summary":s["paragraphs"][0].as_str().unwrap_or("").chars().take(320).collect::<String>()
+                            }))
+                        }).collect::<Vec<_>>();
+                        history.push(json!({"id":old["id"],"date":date,"stories":stories}));
                     }
-                    // Keep archive context bounded as the publication grows. Original
-                    // evidence, when cited, comes from the separate source records.
-                    let stories = old["pages"].as_array().unwrap().iter().flat_map(|p| {
-                        p["stories"].as_array().unwrap().iter().map(|s| json!({
-                            "title":s["title"],"status":s["status"],"source_ids":s["source_ids"],
-                            "summary":s["paragraphs"][0].as_str().unwrap_or("").chars().take(320).collect::<String>()
-                        }))
-                    }).collect::<Vec<_>>();
-                    history.push(json!({"id":old["id"],"date":date,"stories":stories}));
                 }
             }
-        }
-        if kind == "weekly" {
-            let (start, end, _) = crate::interests::coverage(
-                at,
-                kind,
-                self.settings["started_at"].as_str().unwrap(),
-            )?;
-            for s in collection["records"].as_array().unwrap() {
-                historical_sources.insert(s["id"].as_str().unwrap().into(), s.clone());
+            if kind == "weekly" {
+                let (start, end, _) = crate::interests::coverage(
+                    at,
+                    kind,
+                    self.settings["started_at"].as_str().unwrap(),
+                )?;
+                for s in collection["records"].as_array().unwrap() {
+                    historical_sources.insert(s["id"].as_str().unwrap().into(), s.clone());
+                }
+                let sources = historical_sources
+                    .into_values()
+                    .map(serde_json::from_value)
+                    .collect::<std::result::Result<Vec<Source>, _>>()?;
+                collection["records"] = json!(weekly_sources(
+                    sources,
+                    start,
+                    end,
+                    self.settings["max_sources"].as_u64().unwrap_or(50) as usize
+                ));
             }
-            let sources = historical_sources
-                .into_values()
-                .map(serde_json::from_value)
-                .collect::<std::result::Result<Vec<Source>, _>>()?;
-            collection["records"] = json!(weekly_sources(
-                sources,
-                start,
-                end,
-                self.settings["max_sources"].as_u64().unwrap_or(50) as usize
-            ));
-        }
-        let edition = crate::compose::Composer {
-            aws: self.aws.clone(),
-            settings: &self.settings,
-            budget: &budget,
-            store: &self.evidence,
-            run_id: &id,
-        }
-        .compose(&collection, &profile, at, kind, json!(history))
-        .await?;
-        self.evidence
-            .put_json(&key, &serde_json::to_value(&edition)?)
+            let edition = crate::compose::Composer {
+                aws: self.aws.clone(),
+                settings: &self.settings,
+                budget: &budget,
+                store: &self.evidence,
+                run_id: &id,
+            }
+            .compose(&collection, &profile, at, kind, json!(history))
             .await?;
-        self.state.finish(&format!("analysis:{id}")).await?;
-        Ok(edition)
+            self.evidence
+                .put_json(&key, &serde_json::to_value(&edition)?)
+                .await?;
+            self.state.finish(&format!("analysis:{id}")).await?;
+            Ok(edition)
+        }.await;
+        if result.is_err() {
+            self.state.release(&format!("analysis:{id}")).await?;
+        }
+        result
     }
     pub async fn collector(&self, event: Value, request_id: &str) -> Result<Value> {
         let at = event["cutoff"]

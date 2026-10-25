@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
                 let runtime = runtime.clone();
                 let role = role.clone();
                 async move {
+                    eprintln!("{}", json!({"event":"run_started","role":role,"request_id":event.context.request_id}));
                     let result = if role == "publisher" {
                         runtime.publisher(event.payload).await
                     } else {
@@ -87,6 +88,18 @@ async fn main() -> Result<()> {
                             .collector(event.payload, &event.context.request_id)
                             .await
                     };
+                    match &result {
+                        Ok(value) => eprintln!("{}", json!({"event":"run_succeeded","role":role,"request_id":event.context.request_id,"result":value})),
+                        Err(error) => {
+                            let failure = json!({"event":"run_failed","role":role,"request_id":event.context.request_id,"at":chrono::Utc::now(),"error":format!("{error:#}")});
+                            eprintln!("{failure}");
+                            if let Err(save_error) = runtime.evidence.put_json(
+                                &format!("failures/{role}/{}.json",event.context.request_id), &failure
+                            ).await {
+                                eprintln!("Could not save failure record: {save_error}");
+                            }
+                        }
+                    }
                     result.map_err(|e| -> lambda_runtime::Error { e.into() })
                 }
             },

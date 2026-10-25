@@ -101,6 +101,18 @@ pub struct Edition {
 fn one() -> u32 {
     1
 }
+/// Timestamps must be compared as instants, not by their calendar-date prefix.
+/// Undated evidence remains eligible only for explicitly labeled learning items.
+pub fn source_available_at(published: Option<&str>, cutoff: DateTime<FixedOffset>) -> bool {
+    match published {
+        None => true,
+        Some(date) if date.contains('T') => {
+            DateTime::parse_from_rfc3339(date).is_ok_and(|date| date <= cutoff)
+        }
+        Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .is_ok_and(|date| date <= cutoff.date_naive()),
+    }
+}
 pub fn safe_url(value: &str) -> Result<url::Url> {
     let u = url::Url::parse(value)?;
     ensure!(
@@ -159,19 +171,11 @@ impl Edition {
                 s.authority.is_finite() && (0.0..=1.0).contains(&s.authority),
                 "Invalid authority"
             );
-            if let Some(date) = &s.published {
-                ensure!(
-                    date.get(..10)
-                        .is_some_and(|d| d <= self.cutoff.date_naive().to_string().as_str()),
-                    "Future source"
-                );
-                if date.contains('T') {
-                    ensure!(
-                        DateTime::parse_from_rfc3339(date)? <= self.cutoff,
-                        "Source after cutoff"
-                    );
-                }
-            }
+            ensure!(
+                source_available_at(s.published.as_deref(), self.cutoff),
+                "Source {} has an invalid publication date or is after cutoff",
+                s.id
+            );
         }
         let mut seen = HashSet::new();
         for p in &self.pages {

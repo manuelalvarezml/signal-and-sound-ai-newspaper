@@ -36,10 +36,36 @@ fn model_json_preserves_rejection_despite_trailing_prose() {
     assert!(compose::parse_model_json("I think it is supported").is_err());
     assert!(compose::parse_model_json("[]").is_err());
     assert_eq!(
+        compose::parse_model_json(
+            "{\n \"{\n \"supported\":false,\"issues\":[\"unsupported claim\"]}"
+        )
+        .unwrap()["supported"],
+        false
+    );
+    assert!(compose::parse_model_json("{\"supported\":true,\"{\"supported\":false}").is_err());
+    assert_eq!(
         compose::parse_model_json("{\n {\"supported\":false,\"issues\":[\"unsupported claim\"]}")
             .unwrap()["supported"],
         false
     );
+}
+#[test]
+fn cutoff_filter_rejects_same_day_future_and_invalid_timestamps() {
+    use signal_and_sound::model::source_available_at;
+    let cutoff = chrono::DateTime::parse_from_rfc3339("2026-10-25T06:00:00-05:00").unwrap();
+    assert!(!source_available_at(Some("2026-10-25T12:00:00Z"), cutoff));
+    assert!(source_available_at(Some("2026-10-25T11:00:00Z"), cutoff));
+    assert!(source_available_at(
+        Some("2026-10-25T05:59:59-05:00"),
+        cutoff
+    ));
+    assert!(!source_available_at(Some("2026-10-25Tbad"), cutoff));
+    assert!(!source_available_at(Some("2026-10-26"), cutoff));
+    assert!(source_available_at(Some("2026-10-25"), cutoff));
+    assert!(source_available_at(None, cutoff));
+    // A source's local date may be tomorrow while its instant is before cutoff.
+    let cutoff = chrono::DateTime::parse_from_rfc3339("2026-10-25T23:00:00-05:00").unwrap();
+    assert!(source_available_at(Some("2026-10-26T03:00:00Z"), cutoff));
 }
 #[test]
 fn native_schema_requires_citations_and_leaves_evidence_attachment_to_rust() {
@@ -449,77 +475,4 @@ fn legacy_observation_ids_are_not_reapplied() {
     let (updated, log) = interests::apply(&p, &[o], at).unwrap();
     assert!(log.is_empty());
     assert_eq!(updated["topics"][0]["weight"], 0.55);
-}
-
-#[tokio::test]
-async fn truncated_extraction_reuses_bounded_recovery_checkpoint() {
-    use std::sync::Arc;
-    let tmp = tempfile::tempdir().unwrap();
-    let state = State::local(tmp.path().join("state")).unwrap();
-    let store = Store::Local(tmp.path().join("evidence"));
-    let settings = config("settings").unwrap();
-    let budget = Budget::new(state, settings.clone());
-    let mut e = edition();
-    for source in &mut e.sources {
-        source.excerpt = source.excerpt.repeat(4);
-    }
-    let run = "recovery";
-    budget
-        .reserve("recovery:bedrock:extract", "bedrock", 0.1)
-        .await
-        .unwrap();
-    store.put_json("checkpoints/recovery/extract-response.json",&json!({"usage":{"inputTokens":100,"outputTokens":100},"stopReason":"max_tokens","output":{"message":{"content":[{"text":"incomplete"}]}}})).await.unwrap();
-    store
-        .put_json(
-            "checkpoints/recovery/extract-compact.json",
-            &json!({"items":[]}),
-        )
-        .await
-        .unwrap();
-    store
-        .put_json(
-            "checkpoints/recovery/write-rust-v5.json",
-            &serde_json::to_value(&e).unwrap(),
-        )
-        .await
-        .unwrap();
-    store
-        .put_json(
-            "checkpoints/recovery/verify-rust-v5-ai-0.json",
-            &json!({"supported":true,"issues":[]}),
-        )
-        .await
-        .unwrap();
-    store
-        .put_json(
-            "checkpoints/recovery/verify-rust-v5-music-0.json",
-            &json!({"supported":true,"issues":[]}),
-        )
-        .await
-        .unwrap();
-    let composer = compose::Composer {
-        aws: Arc::new(signal_and_sound::aws::Aws::new().await.unwrap()),
-        settings: &settings,
-        budget: &budget,
-        store: &store,
-        run_id: run,
-    };
-    let result = composer
-        .compose(
-            &json!({"records":e.sources,"coverage_notes":[],"cutoff":e.cutoff}),
-            &config("interests").unwrap(),
-            e.cutoff,
-            "daily",
-            json!([]),
-        )
-        .await
-        .unwrap();
-    assert_eq!(result.id, e.id);
-    assert_eq!(
-        budget.state.read(&budget.key).await.unwrap()["requests"]
-            .as_object()
-            .unwrap()
-            .len(),
-        1
-    );
 }

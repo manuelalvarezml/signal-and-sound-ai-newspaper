@@ -120,9 +120,7 @@ pub async fn discover(
                         continue;
                     };
                     let published = item["publishedDate"].as_str().map(String::from);
-                    if let Some(d) = &published
-                        && DateTime::parse_from_rfc3339(d).is_ok_and(|d| d > at)
-                    {
+                    if !crate::model::source_available_at(published.as_deref(), at) {
                         continue;
                     }
                     let highlights = item["highlights"]

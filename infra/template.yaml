@@ -154,7 +154,7 @@ Resources:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/signal-and-sound/*'
-      EventInvokeConfig: {MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 3600}
+      EventInvokeConfig: {MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600}
       Events:
         Morning:
           Type: ScheduleV2
@@ -164,7 +164,7 @@ Resources:
             Input: '{"kind":"daily"}'
             State: !If [Production, ENABLED, DISABLED]
             FlexibleTimeWindow: {Mode: 'OFF'}
-            RetryPolicy: {MaximumRetryAttempts: 0}
+            RetryPolicy: {MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600}
         WeeklyDigest:
           Type: ScheduleV2
           Properties:
@@ -173,7 +173,7 @@ Resources:
             Input: '{"kind":"weekly"}'
             State: !If [Production, ENABLED, DISABLED]
             FlexibleTimeWindow: {Mode: 'OFF'}
-            RetryPolicy: {MaximumRetryAttempts: 0}
+            RetryPolicy: {MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600}
   Publisher:
     Type: AWS::Serverless::Function
     Metadata: {DockerTag: publisher, DockerContext: '..', Dockerfile: Dockerfile}
@@ -187,6 +187,10 @@ Resources:
           APP_ROLE: publisher
       Policies:
         - S3ReadPolicy: {BucketName: !Ref Evidence}
+        - Statement:
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub '${Evidence.Arn}/failures/publisher/*'
         - S3CrudPolicy: {BucketName: !Ref Publication}
         - DynamoDBCrudPolicy: {TableName: !Ref StateTable}
       EventInvokeConfig: {MaximumRetryAttempts: 1, MaximumEventAgeInSeconds: 3600}
