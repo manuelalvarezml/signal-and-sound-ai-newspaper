@@ -476,3 +476,44 @@ fn legacy_observation_ids_are_not_reapplied() {
     assert!(log.is_empty());
     assert_eq!(updated["topics"][0]["weight"], 0.55);
 }
+
+#[tokio::test]
+async fn failed_analysis_releases_only_its_own_lease() {
+    use signal_and_sound::{aws::Aws, pipeline::Runtime};
+    use std::sync::Arc;
+    let tmp = tempfile::tempdir().unwrap();
+    let state = State::local(tmp.path().join("state")).unwrap();
+    let evidence = Store::Local(tmp.path().join("evidence"));
+    let at = edition().cutoff;
+    let id = format!("daily-{}", at.date_naive());
+    evidence
+        .put_json(
+            &format!("checkpoints/{id}/collection.json"),
+            &json!({"records":[],"cutoff":at,"coverage_notes":[]}),
+        )
+        .await
+        .unwrap();
+    let runtime = Runtime {
+        aws: Arc::new(Aws::new().await.unwrap()),
+        settings: config("settings").unwrap(),
+        state: state.clone(),
+        evidence,
+        public: Store::Local(tmp.path().join("public")),
+    };
+    let error = runtime.analyze(at, "daily", None, None).await.unwrap_err();
+    assert!(error.to_string().contains("Insufficient evidence"));
+    let lease = format!("analysis:{id}");
+    assert!(state.claim(&lease, 900).await.unwrap());
+    assert!(
+        runtime
+            .analyze(at, "daily", None, None)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Run active")
+    );
+    assert!(
+        !state.claim(&lease, 900).await.unwrap(),
+        "A rejected concurrent run must not release the owner's lease"
+    );
+}
