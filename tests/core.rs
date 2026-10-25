@@ -111,7 +111,20 @@ fn editorial_repairs_cannot_rewrite_unflagged_stories() {
     );
     assert_eq!(result["pages"][1], draft["pages"][1]);
     assert_eq!(result["cutoff"], draft["cutoff"]);
-    assert!(compose::apply_editorial_patch(draft, &patch, &[]).is_err());
+    assert!(compose::apply_editorial_patch(draft.clone(), &patch, &[]).is_err());
+    let bad_lead =
+        json!({"stories":[],"concepts":[],"leads":[{"id":allowed[0],"lead":"A corrected note"}]});
+    assert!(
+        compose::apply_editorial_patch(draft.clone(), &bad_lead, &allowed)
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown patched page")
+    );
+    let good_lead =
+        json!({"stories":[],"concepts":[],"leads":[{"id":"ai","lead":"A corrected note"}]});
+    let result = compose::apply_editorial_patch(draft.clone(), &good_lead, &allowed).unwrap();
+    assert_eq!(result["pages"][0]["lead"], "A corrected note");
+    assert_eq!(result["pages"][0]["stories"], draft["pages"][0]["stories"]);
 }
 #[test]
 fn invalid_citations_and_future_dates_fail() {

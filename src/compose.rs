@@ -195,12 +195,20 @@ impl Composer<'_> {
                         "../config/edition.schema.json"
                     ))?)
                 } else if stage.starts_with("patch-") {
-                    let base: Value =
+                    let mut base: Value =
                         serde_json::from_str(include_str!("../config/edition.schema.json"))?;
+                    let patch_input: Value = serde_json::from_str(&prompt)?;
+                    if patch_input["allowed_story_ids"]
+                        .as_array()
+                        .is_some_and(|ids| !ids.is_empty())
+                    {
+                        base["$defs"]["Story"]["properties"]["id"]["enum"] =
+                            patch_input["allowed_story_ids"].clone();
+                    }
                     structured_schema(json!({"type":"object","properties":{
                         "stories":{"type":"array","items":{"$ref":"#/$defs/Story"}},
                         "concepts":{"type":"array","items":{"$ref":"#/$defs/Concept"}},
-                        "leads":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"lead":{"type":"string"}}}}
+                        "leads":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","enum":["ai","music"]},"lead":{"type":"string"}}}}
                     },"$defs":base["$defs"]}))
                 } else {
                     json!({"type":"object","properties":{"supported":{"type":"boolean"},"issues":{"type":"array","items":{"type":"string"}}},"required":["supported","issues"],"additionalProperties":false})
@@ -375,7 +383,7 @@ impl Composer<'_> {
                         .iter()
                         .filter(|s| cited.is_empty() || cited.contains(s.id.as_str()))
                         .collect::<Vec<_>>();
-                    let patch_prompt = json!({"instruction":"Repair only the flagged claims. Return {stories:[complete replacement Story objects for allowed_story_ids only],concepts:[only changed Concept objects],leads:[only changed {id,lead} page notes]}. Use empty arrays when no change is needed. Do not rewrite verified stories. Correct headlines and implications as well as paragraphs. Preserve IDs, source_ids, lane and concept references unless the validation issue explicitly concerns them. Narrow claims to what the original evidence actually demonstrates. Attribute results and state trust assumptions. Remove unsupported specifics rather than substituting new ones. Do not invent guarantees, affiliations, hardware, latency or deployments. Keep each replacement within about five words of its prior word count to preserve the page's 60/40 allocation. Keep at least two explained concepts per page. Set evidence to {}. Return only the patch JSON.","allowed_story_ids":allowed,"issues":error,"flagged_stories":flagged,"concepts":raw["concepts"],"original_sources":evidence});
+                    let mut patch_prompt = json!({"instruction":"Repair only the flagged claims. Return {stories:[complete replacement Story objects for allowed_story_ids only],concepts:[only changed Concept objects],leads:[only changed {id,lead} page notes]}. Lead IDs can ONLY be ai or music, never a story ID. Use empty arrays when no change is needed. Do not rewrite verified stories. Correct headlines and implications as well as paragraphs. Preserve IDs, source_ids, lane and concept references unless the validation issue explicitly concerns them. Narrow claims to what the original evidence actually demonstrates. Attribute results and state trust assumptions. Remove unsupported specifics rather than substituting new ones. If evidence does not mention a claim, omit it entirely rather than asserting that the study did not test or conclude it. Do not invent guarantees, affiliations, hardware, latency or deployments. Keep each replacement within about five words of its prior word count to preserve the page's 60/40 allocation, unless correcting a word-allocation error. Keep at least two explained concepts per page. Set evidence to {}. Return only the patch JSON.","allowed_story_ids":allowed,"issues":error,"flagged_stories":flagged,"concepts":raw["concepts"],"original_sources":evidence});
                     let patch = self
                         .call(
                             &format!("patch-rust-v7-{attempt}"),
@@ -384,7 +392,21 @@ impl Composer<'_> {
                             16000,
                         )
                         .await?;
-                    raw = apply_editorial_patch(raw, &patch, &allowed)?;
+                    raw = match apply_editorial_patch(raw.clone(), &patch, &allowed) {
+                        Ok(updated) => updated,
+                        Err(error) => {
+                            patch_prompt["patch_validation_error"] = json!(error.to_string());
+                            let patch = self
+                                .call(
+                                    &format!("patch-rust-v9-{attempt}-shape-retry"),
+                                    self.settings["compose_model"].as_str().unwrap(),
+                                    &patch_prompt,
+                                    16000,
+                                )
+                                .await?;
+                            apply_editorial_patch(raw, &patch, &allowed)?
+                        }
+                    };
                 }
                 Err(e) => return Err(e),
             }
